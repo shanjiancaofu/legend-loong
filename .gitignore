@@ -1,0 +1,14 @@
+﻿Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+.vscode/
+.idea/
+*.sln
+*.suo
+*.user
+*.VC.db
+*.VC.VC.opendb
+*.code-workspace
+*.log
