@@ -1,15 +1,19 @@
 #include "LoongBuildingSystemComponent.h"
 
 #include "BuildPlacementLibrary.h"
+#include "LoongBuildingInstanceComponent.h"
+#include "LoongBuildingMenuWidget.h"
 #include "CollisionQueryParams.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "Components/MeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/EngineTypes.h"
 #include "EngineUtils.h"
 #include "Engine/World.h"
 #include "Engine/OverlapResult.h"
+#include "Blueprint/UserWidget.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
@@ -69,6 +73,12 @@ void ULoongBuildingSystemComponent::BeginPlay()
 
 void ULoongBuildingSystemComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (bMovingBuilding)
+	{
+		CancelMoveBuilding();
+	}
+	HideBuildingMenu();
+	ClearSelectedBuilding();
 	DestroyPreviewActor();
 	Super::EndPlay(EndPlayReason);
 }
@@ -82,9 +92,17 @@ void ULoongBuildingSystemComponent::TickComponent(const float DeltaTime, const E
 	{
 		ProcessDirectKeyboardInput();
 	}
-	if (bBuildingMode)
+	if (bMovingBuilding)
+	{
+		UpdateMovingBuilding();
+	}
+	else if (bBuildingMode)
 	{
 		UpdatePreview();
+	}
+	else if (bEnableDirectKeyboardInput)
+	{
+		ProcessSelectionInput();
 	}
 }
 
@@ -95,14 +113,21 @@ void ULoongBuildingSystemComponent::ToggleBuildingMode()
 
 void ULoongBuildingSystemComponent::SetBuildingMode(const bool bEnabled)
 {
+	if (bMovingBuilding)
+	{
+		return;
+	}
+
 	bBuildingMode = bEnabled;
 	bCurrentPlacementValid = false;
 	if (bBuildingMode)
 	{
 		CreatePreviewActor();
+		ShowBuildingMenu();
 	}
 	else
 	{
+		HideBuildingMenu();
 		DestroyPreviewActor();
 	}
 }
@@ -111,7 +136,14 @@ void ULoongBuildingSystemComponent::RotateBuilding()
 {
 	CurrentPlacementRotation = UBuildPlacementLibrary::SnapRotationTo90(
 		CurrentPlacementRotation + FRotator(0.0f, 90.0f, 0.0f));
-	UpdatePreview();
+	if (bMovingBuilding)
+	{
+		UpdateMovingBuilding();
+	}
+	else
+	{
+		UpdatePreview();
+	}
 }
 
 bool ULoongBuildingSystemComponent::SelectBuildingByIndex(const int32 DefinitionIndex)
@@ -151,7 +183,7 @@ FName ULoongBuildingSystemComponent::GetSelectedBuildingId() const
 
 bool ULoongBuildingSystemComponent::PlaceBuilding()
 {
-	if (!bBuildingMode || !bCurrentPlacementValid || (!GetActiveBuildingClass() && !GetActiveDefinition()) || !GetWorld())
+	if (bMovingBuilding || !bBuildingMode || !bCurrentPlacementValid || (!GetActiveBuildingClass() && !GetActiveDefinition()) || !GetWorld())
 	{
 		return false;
 	}
@@ -232,6 +264,14 @@ AActor* ULoongBuildingSystemComponent::SpawnBuildingActor(const FTransform& Spaw
 	}
 
 	ApplyActiveDefinitionVisuals(BuildingActor, bForPreview);
+	if (!bForPreview)
+	{
+		ULoongBuildingInstanceComponent* InstanceComponent = NewObject<ULoongBuildingInstanceComponent>(
+			BuildingActor, TEXT("LoongBuildingInstance"));
+		InstanceComponent->BuildingId = GetSelectedBuildingId();
+		InstanceComponent->RegisterComponent();
+		BuildingActor->Tags.AddUnique(TEXT("LoongPlacedBuilding"));
+	}
 	return BuildingActor;
 }
 
@@ -332,6 +372,319 @@ void ULoongBuildingSystemComponent::SetPreviewMaterial(UMaterialInterface* Mater
 	}
 }
 
+void ULoongBuildingSystemComponent::ShowBuildingMenu()
+{
+	if (BuildingMenuWidget || !PlayerController)
+	{
+		return;
+	}
+
+	UClass* WidgetClass = BuildingMenuWidgetClass ? BuildingMenuWidgetClass.Get() : ULoongBuildingMenuWidget::StaticClass();
+	BuildingMenuWidget = CreateWidget<ULoongBuildingMenuWidget>(PlayerController, WidgetClass);
+	if (BuildingMenuWidget)
+	{
+		BuildingMenuWidget->InitializeForBuildingSystem(this);
+		BuildingMenuWidget->AddToViewport(100);
+	}
+}
+
+void ULoongBuildingSystemComponent::HideBuildingMenu()
+{
+	if (BuildingMenuWidget)
+	{
+		BuildingMenuWidget->RemoveFromParent();
+		BuildingMenuWidget = nullptr;
+	}
+}
+
+bool ULoongBuildingSystemComponent::TraceMouseToBuilding(FHitResult& OutHit) const
+{
+	if (!PlayerController || !GetWorld())
+	{
+		return false;
+	}
+
+	FVector RayOrigin;
+	FVector RayDirection;
+	if (!PlayerController->DeprojectMousePositionToWorld(RayOrigin, RayDirection))
+	{
+		return false;
+	}
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(LoongBuildingSelection), true);
+	QueryParams.AddIgnoredActor(GetOwner());
+	const FVector TraceEnd = RayOrigin + RayDirection * 100000.0f;
+	if (GetWorld()->LineTraceSingleByChannel(OutHit, RayOrigin, TraceEnd, ECC_Visibility, QueryParams))
+	{
+		return true;
+	}
+	return GetWorld()->LineTraceSingleByChannel(OutHit, RayOrigin, TraceEnd, PlacementCollisionChannel, QueryParams);
+}
+
+bool ULoongBuildingSystemComponent::IsManagedBuildingActor(const AActor* Actor) const
+{
+	if (!Actor)
+	{
+		return false;
+	}
+	if (Actor->FindComponentByClass<ULoongBuildingInstanceComponent>()
+		|| Actor->ActorHasTag(TEXT("LoongPlacedBuilding")))
+	{
+		return true;
+	}
+	if (BuildingClass && Actor->IsA(BuildingClass))
+	{
+		return true;
+	}
+	for (const FLoongBuildingDefinition& Definition : BuildingDefinitions)
+	{
+		if (Definition.BuildingClass && Actor->IsA(Definition.BuildingClass))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+void ULoongBuildingSystemComponent::SelectBuildingActor(AActor* Actor)
+{
+	if (SelectedBuildingActor == Actor)
+	{
+		return;
+	}
+
+	ClearSelectedBuilding();
+	if (!IsManagedBuildingActor(Actor))
+	{
+		return;
+	}
+
+	SelectedBuildingActor = Actor;
+	TArray<UPrimitiveComponent*> Primitives;
+	Actor->GetComponents<UPrimitiveComponent>(Primitives);
+	const UMaterialInterface* HighlightMaterial = SelectedBuildingMaterial ? SelectedBuildingMaterial : PreviewValidMaterial;
+	for (UPrimitiveComponent* Primitive : Primitives)
+	{
+		if (Primitive)
+		{
+			Primitive->SetRenderCustomDepth(true);
+			Primitive->SetCustomDepthStencilValue(1);
+			if (UMeshComponent* Mesh = Cast<UMeshComponent>(Primitive))
+			{
+				FLoongSelectedMaterialState State;
+				State.Mesh = Mesh;
+				for (int32 MaterialIndex = 0; MaterialIndex < Mesh->GetNumMaterials(); ++MaterialIndex)
+				{
+					State.Materials.Add(Mesh->GetMaterial(MaterialIndex));
+					if (HighlightMaterial)
+					{
+						Mesh->SetMaterial(MaterialIndex, const_cast<UMaterialInterface*>(HighlightMaterial));
+					}
+				}
+				SelectedMaterialStates.Add(MoveTemp(State));
+				Mesh->SetOverlayMaterial(SelectedBuildingMaterial);
+			}
+		}
+	}
+}
+
+void ULoongBuildingSystemComponent::ClearSelectedBuilding()
+{
+	for (const FLoongSelectedMaterialState& State : SelectedMaterialStates)
+	{
+		if (State.Mesh)
+		{
+			for (int32 MaterialIndex = 0; MaterialIndex < State.Materials.Num(); ++MaterialIndex)
+			{
+				State.Mesh->SetMaterial(MaterialIndex, State.Materials[MaterialIndex]);
+			}
+			State.Mesh->SetOverlayMaterial(nullptr);
+			State.Mesh->SetRenderCustomDepth(false);
+		}
+	}
+	SelectedMaterialStates.Empty();
+
+	if (SelectedBuildingActor)
+	{
+		TArray<UPrimitiveComponent*> Primitives;
+		SelectedBuildingActor->GetComponents<UPrimitiveComponent>(Primitives);
+		for (UPrimitiveComponent* Primitive : Primitives)
+		{
+			if (Primitive)
+			{
+				Primitive->SetRenderCustomDepth(false);
+			}
+		}
+	}
+	SelectedBuildingActor = nullptr;
+}
+
+void ULoongBuildingSystemComponent::CaptureAndSetActorMaterial(AActor* Actor, UMaterialInterface* Material,
+	TArray<FLoongSelectedMaterialState>& OutStates)
+{
+	if (!Actor)
+	{
+		return;
+	}
+
+	TArray<UPrimitiveComponent*> Primitives;
+	Actor->GetComponents<UPrimitiveComponent>(Primitives);
+	for (UPrimitiveComponent* Primitive : Primitives)
+	{
+		if (UMeshComponent* Mesh = Cast<UMeshComponent>(Primitive))
+		{
+			FLoongSelectedMaterialState State;
+			State.Mesh = Mesh;
+			for (int32 MaterialIndex = 0; MaterialIndex < Mesh->GetNumMaterials(); ++MaterialIndex)
+			{
+				State.Materials.Add(Mesh->GetMaterial(MaterialIndex));
+				if (Material)
+				{
+					Mesh->SetMaterial(MaterialIndex, Material);
+				}
+			}
+			OutStates.Add(MoveTemp(State));
+		}
+	}
+}
+
+void ULoongBuildingSystemComponent::RestoreMaterialStates(TArray<FLoongSelectedMaterialState>& States)
+{
+	for (const FLoongSelectedMaterialState& State : States)
+	{
+		if (!State.Mesh)
+		{
+			continue;
+		}
+		for (int32 MaterialIndex = 0; MaterialIndex < State.Materials.Num(); ++MaterialIndex)
+		{
+			State.Mesh->SetMaterial(MaterialIndex, State.Materials[MaterialIndex]);
+		}
+	}
+	States.Empty();
+}
+
+void ULoongBuildingSystemComponent::BeginMoveSelectedBuilding()
+{
+	if (bBuildingMode || bMovingBuilding || !SelectedBuildingActor || !IsManagedBuildingActor(SelectedBuildingActor))
+	{
+		return;
+	}
+
+	MovingBuildingActor = SelectedBuildingActor;
+	MovingOriginalTransform = MovingBuildingActor->GetActorTransform();
+	ClearSelectedBuilding();
+
+	if (const ULoongBuildingInstanceComponent* Instance = MovingBuildingActor->FindComponentByClass<ULoongBuildingInstanceComponent>())
+	{
+		if (!Instance->BuildingId.IsNone())
+		{
+			SelectBuildingById(Instance->BuildingId);
+		}
+	}
+
+	MovingBuildingActor->SetActorEnableCollision(false);
+	CaptureAndSetActorMaterial(MovingBuildingActor,
+		PreviewInvalidMaterial ? PreviewInvalidMaterial : SelectedBuildingMaterial, MovingMaterialStates);
+	CurrentPlacementRotation = UBuildPlacementLibrary::SnapRotationTo90(MovingBuildingActor->GetActorRotation());
+	bMovingBuilding = true;
+	bMovingPlacementValid = false;
+	UpdateMovingBuilding();
+}
+
+void ULoongBuildingSystemComponent::UpdateMovingBuilding()
+{
+	if (!bMovingBuilding || !MovingBuildingActor)
+	{
+		return;
+	}
+
+	FHitResult GroundHit;
+	if (!TraceMouseToGround(GroundHit))
+	{
+		bMovingPlacementValid = false;
+		RestoreMaterialStates(MovingMaterialStates);
+		CaptureAndSetActorMaterial(MovingBuildingActor, PreviewInvalidMaterial, MovingMaterialStates);
+		return;
+	}
+
+	CurrentGridAnchor = UBuildPlacementLibrary::SnapToGrid(
+		GroundHit.ImpactPoint + FVector(0.0f, 0.0f, BuildingPivotZOffset), GridSize);
+	const int32 RotationQuarterTurns = UBuildPlacementLibrary::GetRotationQuarterTurns(CurrentPlacementRotation.Yaw);
+	CurrentPlacementCenter = UBuildPlacementLibrary::GetBuildingCenterFromGridAnchor(
+		CurrentGridAnchor, GetActiveGridWidth(), GetActiveGridHeight(), GridSize, RotationQuarterTurns);
+	CurrentPlacementLocation = UBuildPlacementLibrary::GetActorLocationForCenteredFootprint(
+		MovingBuildingActor, CurrentPlacementCenter, CurrentPlacementRotation);
+	MovingBuildingActor->SetActorLocationAndRotation(CurrentPlacementLocation, CurrentPlacementRotation);
+
+	bMovingPlacementValid = IsInsideBaseBounds() && IsPlacementClearFiltered();
+	RestoreMaterialStates(MovingMaterialStates);
+	CaptureAndSetActorMaterial(MovingBuildingActor,
+		bMovingPlacementValid ? PreviewValidMaterial : PreviewInvalidMaterial, MovingMaterialStates);
+}
+
+bool ULoongBuildingSystemComponent::ConfirmMoveBuilding()
+{
+	if (!bMovingBuilding || !MovingBuildingActor)
+	{
+		return false;
+	}
+
+	UpdateMovingBuilding();
+	if (!bMovingPlacementValid)
+	{
+		return false;
+	}
+
+	MovingBuildingActor->SetActorEnableCollision(true);
+	RestoreMaterialStates(MovingMaterialStates);
+	AActor* MovedActor = MovingBuildingActor;
+	MovingBuildingActor = nullptr;
+	bMovingBuilding = false;
+	SelectBuildingActor(MovedActor);
+	return true;
+}
+
+void ULoongBuildingSystemComponent::CancelMoveBuilding()
+{
+	if (!bMovingBuilding || !MovingBuildingActor)
+	{
+		return;
+	}
+
+	MovingBuildingActor->SetActorTransform(MovingOriginalTransform);
+	MovingBuildingActor->SetActorEnableCollision(true);
+	RestoreMaterialStates(MovingMaterialStates);
+	AActor* RestoredActor = MovingBuildingActor;
+	MovingBuildingActor = nullptr;
+	bMovingBuilding = false;
+	bMovingPlacementValid = false;
+	SelectBuildingActor(RestoredActor);
+}
+
+void ULoongBuildingSystemComponent::ProcessSelectionInput()
+{
+	if (!PlayerController)
+	{
+		return;
+	}
+
+	const bool bSelectKeyDown = PlayerController->IsInputKeyDown(EKeys::LeftMouseButton);
+	if (bSelectKeyDown && !bPreviousSelectKeyDown)
+	{
+		FHitResult Hit;
+		if (TraceMouseToBuilding(Hit) && IsManagedBuildingActor(Hit.GetActor()))
+		{
+			SelectBuildingActor(Hit.GetActor());
+		}
+		else
+		{
+			ClearSelectedBuilding();
+		}
+	}
+	bPreviousSelectKeyDown = bSelectKeyDown;
+}
+
 bool ULoongBuildingSystemComponent::TraceMouseToGround(FHitResult& OutHit) const
 {
 	if (!PlayerController || !GetWorld())
@@ -351,6 +704,14 @@ bool ULoongBuildingSystemComponent::TraceMouseToGround(FHitResult& OutHit) const
 	if (PreviewActor)
 	{
 		QueryParams.AddIgnoredActor(PreviewActor);
+	}
+	if (MovingBuildingActor)
+	{
+		QueryParams.AddIgnoredActor(MovingBuildingActor);
+	}
+	if (MovingBuildingActor)
+	{
+		QueryParams.AddIgnoredActor(MovingBuildingActor);
 	}
 
 	const FVector TraceEnd = RayOrigin + RayDirection * 100000.0f;
@@ -484,17 +845,42 @@ void ULoongBuildingSystemComponent::ProcessDirectKeyboardInput()
 	const bool bBuildKeyDown = PlayerController->IsInputKeyDown(EKeys::B);
 	const bool bRotateKeyDown = PlayerController->IsInputKeyDown(EKeys::R);
 	const bool bPlaceKeyDown = PlayerController->IsInputKeyDown(EKeys::LeftMouseButton);
+	const bool bMoveKeyDown = PlayerController->IsInputKeyDown(EKeys::M);
+	const bool bEscapeKeyDown = PlayerController->IsInputKeyDown(EKeys::Escape);
 	const FKey BuildingNumberKeys[4] = {EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four};
 
-	if (bBuildKeyDown && !bPreviousBuildKeyDown)
+	if (bEscapeKeyDown && !bPreviousEscapeKeyDown)
+	{
+		if (bMovingBuilding)
+		{
+			CancelMoveBuilding();
+		}
+		else if (bBuildingMode)
+		{
+			SetBuildingMode(false);
+		}
+		else
+		{
+			ClearSelectedBuilding();
+		}
+	}
+	if (bMoveKeyDown && !bPreviousMoveKeyDown && !bBuildingMode && !bMovingBuilding)
+	{
+		BeginMoveSelectedBuilding();
+	}
+	if (bBuildKeyDown && !bPreviousBuildKeyDown && !bMovingBuilding)
 	{
 		ToggleBuildingMode();
 	}
-	if (bBuildingMode && bRotateKeyDown && !bPreviousRotateKeyDown)
+	if ((bBuildingMode || bMovingBuilding) && bRotateKeyDown && !bPreviousRotateKeyDown)
 	{
 		RotateBuilding();
 	}
-	if (bBuildingMode && bPlaceKeyDown && !bPreviousPlaceKeyDown)
+	if (bMovingBuilding && bPlaceKeyDown && !bPreviousPlaceKeyDown)
+	{
+		ConfirmMoveBuilding();
+	}
+	else if (bBuildingMode && bPlaceKeyDown && !bPreviousPlaceKeyDown)
 	{
 		PlaceBuilding();
 	}
@@ -511,4 +897,6 @@ void ULoongBuildingSystemComponent::ProcessDirectKeyboardInput()
 	bPreviousBuildKeyDown = bBuildKeyDown;
 	bPreviousRotateKeyDown = bRotateKeyDown;
 	bPreviousPlaceKeyDown = bPlaceKeyDown;
+	bPreviousMoveKeyDown = bMoveKeyDown;
+	bPreviousEscapeKeyDown = bEscapeKeyDown;
 }

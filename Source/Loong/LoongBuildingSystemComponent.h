@@ -3,10 +3,27 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "LoongBuildingTypes.h"
+#include "LoongBuildingMenuWidget.h"
 #include "LoongBuildingSystemComponent.generated.h"
 
 class UMaterialInterface;
 class UStaticMesh;
+class ULoongBuildingMenuWidget;
+class UMeshComponent;
+
+struct FLoongSelectedMaterialState
+{
+	TObjectPtr<UMeshComponent> Mesh = nullptr;
+	TArray<TObjectPtr<UMaterialInterface>> Materials;
+};
+
+UENUM(BlueprintType)
+enum class ELoongBuildingInteractionState : uint8
+{
+	Default,
+	Building,
+	Moving
+};
 
 /**
  * Self-contained building-mode controller. Add this component to the player
@@ -47,6 +64,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Loong|Building|Assets")
 	TObjectPtr<UMaterialInterface> PreviewInvalidMaterial;
 
+	/** Optional selected-building overlay; falls back to PreviewValidMaterial. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Loong|Building|Selection")
+	TObjectPtr<UMaterialInterface> SelectedBuildingMaterial;
+
 	/**
 	 * Trace channel selected in Project Settings > Collision > Trace Channels.
 	 * The current project maps TraceTypeQuery1 to BuildGroundTrace.
@@ -78,6 +99,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Loong|Building|Input")
 	bool bStartInBuildMode = false;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Loong|Building|Menu")
+	TSubclassOf<ULoongBuildingMenuWidget> BuildingMenuWidgetClass;
+
 	UFUNCTION(BlueprintCallable, Category="Loong|Building|Mode")
 	void ToggleBuildingMode();
 
@@ -86,6 +110,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Loong|Building|Mode")
 	bool IsBuildingMode() const { return bBuildingMode; }
+
+	UFUNCTION(BlueprintPure, Category="Loong|Building|Mode")
+	bool IsMovingBuilding() const { return bMovingBuilding; }
 
 	UFUNCTION(BlueprintCallable, Category="Loong|Building|Placement")
 	void RotateBuilding();
@@ -123,6 +150,20 @@ private:
 	void SetPreviewMaterial(UMaterialInterface* Material);
 	AActor* SpawnBuildingActor(const FTransform& SpawnTransform, bool bForPreview);
 	void ApplyActiveDefinitionVisuals(AActor* BuildingActor, bool bForPreview);
+	void ShowBuildingMenu();
+	void HideBuildingMenu();
+	void ProcessSelectionInput();
+	void BeginMoveSelectedBuilding();
+	bool ConfirmMoveBuilding();
+	void CancelMoveBuilding();
+	void UpdateMovingBuilding();
+	void CaptureAndSetActorMaterial(AActor* Actor, UMaterialInterface* Material,
+		TArray<FLoongSelectedMaterialState>& OutStates);
+	void RestoreMaterialStates(TArray<FLoongSelectedMaterialState>& States);
+	bool TraceMouseToBuilding(FHitResult& OutHit) const;
+	bool IsManagedBuildingActor(const AActor* Actor) const;
+	void SelectBuildingActor(AActor* Actor);
+	void ClearSelectedBuilding();
 	const FLoongBuildingDefinition* GetActiveDefinition() const;
 	TSubclassOf<AActor> GetActiveBuildingClass() const;
 	FVector2D GetActiveFootprintHalfExtent() const;
@@ -142,6 +183,24 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<APlayerController> PlayerController;
 
+	UPROPERTY(Transient)
+	TObjectPtr<ULoongBuildingMenuWidget> BuildingMenuWidget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<AActor> SelectedBuildingActor;
+
+	TArray<FLoongSelectedMaterialState> SelectedMaterialStates;
+
+	UPROPERTY(Transient)
+	TObjectPtr<AActor> MovingBuildingActor;
+
+	FTransform MovingOriginalTransform;
+	TArray<FLoongSelectedMaterialState> MovingMaterialStates;
+	bool bMovingBuilding = false;
+	bool bMovingPlacementValid = false;
+	bool bPreviousMoveKeyDown = false;
+	bool bPreviousEscapeKeyDown = false;
+
 	FVector CurrentPlacementLocation = FVector::ZeroVector;
 	FVector CurrentPlacementCenter = FVector::ZeroVector;
 	FVector CurrentGridAnchor = FVector::ZeroVector;
@@ -151,5 +210,6 @@ private:
 	bool bPreviousBuildKeyDown = false;
 	bool bPreviousRotateKeyDown = false;
 	bool bPreviousPlaceKeyDown = false;
+	bool bPreviousSelectKeyDown = false;
 	bool bPreviousBuildingNumberKeyDown[4] = {false, false, false, false};
 };
