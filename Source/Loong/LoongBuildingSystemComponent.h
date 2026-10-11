@@ -2,9 +2,11 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "LoongBuildingTypes.h"
 #include "LoongBuildingSystemComponent.generated.h"
 
 class UMaterialInterface;
+class UStaticMesh;
 
 /**
  * Self-contained building-mode controller. Add this component to the player
@@ -23,9 +25,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Loong|Building|Assets")
 	TSubclassOf<AActor> BuildingClass;
 
+	/** Inline definitions for the initial catalog; later these can be moved to data assets. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Loong|Building|Catalog")
+	TArray<FLoongBuildingDefinition> BuildingDefinitions;
+
+	/** Currently selected entry in BuildingDefinitions. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Loong|Building|Catalog", meta=(ClampMin="0"))
+	int32 SelectedBuildingIndex = 0;
+
 	/** Ground actor whose bounds define the playable build area. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Loong|Building|Bounds")
 	TObjectPtr<AActor> BaseGroundActor;
+
+	/** Optional level Actor tag used to resolve BaseGroundActor once at BeginPlay. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Loong|Building|Bounds")
+	FName BaseGroundActorTag = TEXT("LoongBaseGround");
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Loong|Building|Assets")
 	TObjectPtr<UMaterialInterface> PreviewValidMaterial;
@@ -88,6 +102,15 @@ public:
 	UFUNCTION(BlueprintPure, Category="Loong|Building|Placement")
 	FRotator GetCurrentPlacementRotation() const { return CurrentPlacementRotation; }
 
+	UFUNCTION(BlueprintCallable, Category="Loong|Building|Catalog")
+	bool SelectBuildingByIndex(int32 DefinitionIndex);
+
+	UFUNCTION(BlueprintCallable, Category="Loong|Building|Catalog")
+	bool SelectBuildingById(FName BuildingId);
+
+	UFUNCTION(BlueprintPure, Category="Loong|Building|Catalog")
+	FName GetSelectedBuildingId() const;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -98,9 +121,18 @@ private:
 	void CreatePreviewActor();
 	void DestroyPreviewActor();
 	void SetPreviewMaterial(UMaterialInterface* Material);
+	AActor* SpawnBuildingActor(const FTransform& SpawnTransform, bool bForPreview);
+	void ApplyActiveDefinitionVisuals(AActor* BuildingActor, bool bForPreview);
+	const FLoongBuildingDefinition* GetActiveDefinition() const;
+	TSubclassOf<AActor> GetActiveBuildingClass() const;
+	FVector2D GetActiveFootprintHalfExtent() const;
+	float GetActiveBuildingHalfHeight() const;
+	int32 GetActiveGridWidth() const;
+	int32 GetActiveGridHeight() const;
 	bool TraceMouseToGround(FHitResult& OutHit) const;
 	bool IsPlacementClearFiltered() const;
 	bool IsInsideBaseBounds() const;
+	void ResolveBaseGroundActor();
 	ECollisionChannel ResolveGroundTraceChannel() const;
 	void ProcessDirectKeyboardInput();
 
@@ -111,10 +143,13 @@ private:
 	TObjectPtr<APlayerController> PlayerController;
 
 	FVector CurrentPlacementLocation = FVector::ZeroVector;
+	FVector CurrentPlacementCenter = FVector::ZeroVector;
+	FVector CurrentGridAnchor = FVector::ZeroVector;
 	FRotator CurrentPlacementRotation = FRotator::ZeroRotator;
 	bool bBuildingMode = false;
 	bool bCurrentPlacementValid = false;
 	bool bPreviousBuildKeyDown = false;
 	bool bPreviousRotateKeyDown = false;
 	bool bPreviousPlaceKeyDown = false;
+	bool bPreviousBuildingNumberKeyDown[4] = {false, false, false, false};
 };

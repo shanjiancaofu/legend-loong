@@ -3,8 +3,11 @@
 #include "BuildPlacementLibrary.h"
 #include "CollisionQueryParams.h"
 #include "Components/PrimitiveComponent.h"
+#include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/EngineTypes.h"
+#include "EngineUtils.h"
 #include "Engine/World.h"
 #include "Engine/OverlapResult.h"
 #include "GameFramework/Pawn.h"
@@ -16,6 +19,32 @@ ULoongBuildingSystemComponent::ULoongBuildingSystemComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
+
+	BuildingDefinitions.SetNum(4);
+	BuildingDefinitions[0].BuildingId = TEXT("SmallDragonHouse");
+	BuildingDefinitions[0].DisplayName = NSLOCTEXT("LoongBuilding", "SmallDragonHouse", "Small Dragon House");
+	BuildingDefinitions[0].GridWidth = 1;
+	BuildingDefinitions[0].GridHeight = 1;
+	BuildingDefinitions[0].BuildingHeight = 200.0f;
+	BuildingDefinitions[0].BuildingCategory = ELoongBuildingCategory::Housing;
+	BuildingDefinitions[1].BuildingId = TEXT("LongBuilding");
+	BuildingDefinitions[1].DisplayName = NSLOCTEXT("LoongBuilding", "LongBuilding", "Long Building");
+	BuildingDefinitions[1].GridWidth = 1;
+	BuildingDefinitions[1].GridHeight = 2;
+	BuildingDefinitions[1].BuildingHeight = 200.0f;
+	BuildingDefinitions[1].BuildingCategory = ELoongBuildingCategory::Housing;
+	BuildingDefinitions[2].BuildingId = TEXT("MediumDragonHouse");
+	BuildingDefinitions[2].DisplayName = NSLOCTEXT("LoongBuilding", "MediumDragonHouse", "Medium Dragon House");
+	BuildingDefinitions[2].GridWidth = 2;
+	BuildingDefinitions[2].GridHeight = 2;
+	BuildingDefinitions[2].BuildingHeight = 200.0f;
+	BuildingDefinitions[2].BuildingCategory = ELoongBuildingCategory::Housing;
+	BuildingDefinitions[3].BuildingId = TEXT("Hatchery");
+	BuildingDefinitions[3].DisplayName = NSLOCTEXT("LoongBuilding", "Hatchery", "Hatchery");
+	BuildingDefinitions[3].GridWidth = 2;
+	BuildingDefinitions[3].GridHeight = 3;
+	BuildingDefinitions[3].BuildingHeight = 200.0f;
+	BuildingDefinitions[3].BuildingCategory = ELoongBuildingCategory::Production;
 }
 
 void ULoongBuildingSystemComponent::BeginPlay()
@@ -30,6 +59,7 @@ void ULoongBuildingSystemComponent::BeginPlay()
 	{
 		PlayerController = GetWorld()->GetFirstPlayerController();
 	}
+	ResolveBaseGroundActor();
 
 	if (bStartInBuildMode)
 	{
@@ -84,18 +114,49 @@ void ULoongBuildingSystemComponent::RotateBuilding()
 	UpdatePreview();
 }
 
-bool ULoongBuildingSystemComponent::PlaceBuilding()
+bool ULoongBuildingSystemComponent::SelectBuildingByIndex(const int32 DefinitionIndex)
 {
-	if (!bBuildingMode || !bCurrentPlacementValid || !BuildingClass || !GetWorld())
+	if (!BuildingDefinitions.IsValidIndex(DefinitionIndex) || !BuildingDefinitions[DefinitionIndex].IsUsable())
 	{
 		return false;
 	}
 
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.Owner = GetOwner();
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	AActor* PlacedActor = GetWorld()->SpawnActor<AActor>(BuildingClass, CurrentPlacementLocation,
-		CurrentPlacementRotation, SpawnParams);
+	SelectedBuildingIndex = DefinitionIndex;
+	if (bBuildingMode)
+	{
+		DestroyPreviewActor();
+		CreatePreviewActor();
+		UpdatePreview();
+	}
+	return true;
+}
+
+bool ULoongBuildingSystemComponent::SelectBuildingById(const FName BuildingId)
+{
+	for (int32 Index = 0; Index < BuildingDefinitions.Num(); ++Index)
+	{
+		if (BuildingDefinitions[Index].BuildingId == BuildingId)
+		{
+			return SelectBuildingByIndex(Index);
+		}
+	}
+	return false;
+}
+
+FName ULoongBuildingSystemComponent::GetSelectedBuildingId() const
+{
+	const FLoongBuildingDefinition* Definition = GetActiveDefinition();
+	return Definition ? Definition->BuildingId : NAME_None;
+}
+
+bool ULoongBuildingSystemComponent::PlaceBuilding()
+{
+	if (!bBuildingMode || !bCurrentPlacementValid || (!GetActiveBuildingClass() && !GetActiveDefinition()) || !GetWorld())
+	{
+		return false;
+	}
+
+	AActor* PlacedActor = SpawnBuildingActor(FTransform(CurrentPlacementRotation, CurrentPlacementLocation), false);
 	if (!PlacedActor)
 	{
 		return false;
@@ -108,7 +169,7 @@ bool ULoongBuildingSystemComponent::PlaceBuilding()
 
 void ULoongBuildingSystemComponent::UpdatePreview()
 {
-	if (!PreviewActor || !BuildingClass)
+	if (!PreviewActor || (!GetActiveBuildingClass() && !GetActiveDefinition()))
 	{
 		bCurrentPlacementValid = false;
 		return;
@@ -122,8 +183,13 @@ void ULoongBuildingSystemComponent::UpdatePreview()
 		return;
 	}
 
-	CurrentPlacementLocation = UBuildPlacementLibrary::SnapToGrid(
+	CurrentGridAnchor = UBuildPlacementLibrary::SnapToGrid(
 		GroundHit.ImpactPoint + FVector(0.0f, 0.0f, BuildingPivotZOffset), GridSize);
+	const int32 RotationQuarterTurns = UBuildPlacementLibrary::GetRotationQuarterTurns(CurrentPlacementRotation.Yaw);
+	CurrentPlacementCenter = UBuildPlacementLibrary::GetBuildingCenterFromGridAnchor(
+		CurrentGridAnchor, GetActiveGridWidth(), GetActiveGridHeight(), GridSize, RotationQuarterTurns);
+	CurrentPlacementLocation = UBuildPlacementLibrary::GetActorLocationForCenteredFootprint(
+		PreviewActor, CurrentPlacementCenter, CurrentPlacementRotation);
 	PreviewActor->SetActorLocationAndRotation(CurrentPlacementLocation, CurrentPlacementRotation);
 
 	bCurrentPlacementValid = IsInsideBaseBounds() && IsPlacementClearFiltered();
@@ -132,21 +198,106 @@ void ULoongBuildingSystemComponent::UpdatePreview()
 
 void ULoongBuildingSystemComponent::CreatePreviewActor()
 {
-	if (PreviewActor || !BuildingClass || !GetWorld())
+	if (PreviewActor || (!GetActiveBuildingClass() && !GetActiveDefinition()) || !GetWorld())
 	{
 		return;
 	}
 
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.Owner = GetOwner();
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	PreviewActor = GetWorld()->SpawnActor<AActor>(BuildingClass, FVector::ZeroVector,
-		FRotator::ZeroRotator, SpawnParams);
+	PreviewActor = SpawnBuildingActor(FTransform::Identity, true);
 	if (PreviewActor)
 	{
 		PreviewActor->SetActorEnableCollision(false);
 		PreviewActor->SetActorHiddenInGame(false);
 		SetPreviewMaterial(PreviewInvalidMaterial);
+	}
+}
+
+AActor* ULoongBuildingSystemComponent::SpawnBuildingActor(const FTransform& SpawnTransform, const bool bForPreview)
+{
+	if (!GetWorld())
+	{
+		return nullptr;
+	}
+
+	const TSubclassOf<AActor> SpawnClass = GetActiveBuildingClass();
+	UClass* SpawnUClass = SpawnClass ? SpawnClass.Get() : AActor::StaticClass();
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = GetOwner();
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	AActor* BuildingActor = GetWorld()->SpawnActor<AActor>(SpawnUClass,
+		SpawnTransform, SpawnParams);
+	if (!BuildingActor)
+	{
+		return nullptr;
+	}
+
+	ApplyActiveDefinitionVisuals(BuildingActor, bForPreview);
+	return BuildingActor;
+}
+
+void ULoongBuildingSystemComponent::ApplyActiveDefinitionVisuals(AActor* BuildingActor, const bool bForPreview)
+{
+	if (!BuildingActor)
+	{
+		return;
+	}
+
+	const FLoongBuildingDefinition* Definition = GetActiveDefinition();
+	const UStaticMesh* ConfiguredMesh = Definition ?
+		(bForPreview && Definition->PreviewMesh ? Definition->PreviewMesh : Definition->BuildingMesh) : nullptr;
+	TArray<UStaticMeshComponent*> MeshComponents;
+	BuildingActor->GetComponents<UStaticMeshComponent>(MeshComponents);
+	if (MeshComponents.Num() == 0 && ConfiguredMesh)
+	{
+		USceneComponent* RootComponent = BuildingActor->GetRootComponent();
+		if (!RootComponent)
+		{
+			RootComponent = NewObject<USceneComponent>(BuildingActor, TEXT("BuildingRoot"));
+			BuildingActor->SetRootComponent(RootComponent);
+			RootComponent->RegisterComponent();
+		}
+
+		UStaticMeshComponent* GeneratedMeshComponent = NewObject<UStaticMeshComponent>(BuildingActor, TEXT("BuildingMesh"));
+		GeneratedMeshComponent->SetupAttachment(RootComponent);
+		GeneratedMeshComponent->SetStaticMesh(const_cast<UStaticMesh*>(ConfiguredMesh));
+		GeneratedMeshComponent->RegisterComponent();
+		MeshComponents.Add(GeneratedMeshComponent);
+	}
+	if (ConfiguredMesh)
+	{
+		for (UStaticMeshComponent* MeshComponent : MeshComponents)
+		{
+			if (MeshComponent)
+			{
+				MeshComponent->SetStaticMesh(const_cast<UStaticMesh*>(ConfiguredMesh));
+			}
+		}
+	}
+
+	if (Definition && Definition->bAutoFitMeshToFootprint && MeshComponents.Num() == 1 && MeshComponents[0])
+	{
+		FVector LocalMin;
+		FVector LocalMax;
+		MeshComponents[0]->GetLocalBounds(LocalMin, LocalMax);
+		const FVector CurrentSize = (LocalMax - LocalMin) * MeshComponents[0]->GetRelativeScale3D();
+		const FVector DesiredSize(
+			Definition->GridWidth * GridSize,
+			Definition->GridHeight * GridSize,
+			Definition->BuildingHeight);
+		FVector RelativeScale = MeshComponents[0]->GetRelativeScale3D();
+		if (FMath::Abs(CurrentSize.X) > KINDA_SMALL_NUMBER)
+		{
+			RelativeScale.X *= DesiredSize.X / CurrentSize.X;
+		}
+		if (FMath::Abs(CurrentSize.Y) > KINDA_SMALL_NUMBER)
+		{
+			RelativeScale.Y *= DesiredSize.Y / CurrentSize.Y;
+		}
+		if (FMath::Abs(CurrentSize.Z) > KINDA_SMALL_NUMBER)
+		{
+			RelativeScale.Z *= DesiredSize.Z / CurrentSize.Z;
+		}
+		MeshComponents[0]->SetRelativeScale3D(RelativeScale);
 	}
 }
 
@@ -209,7 +360,7 @@ bool ULoongBuildingSystemComponent::TraceMouseToGround(FHitResult& OutHit) const
 
 bool ULoongBuildingSystemComponent::IsPlacementClearFiltered() const
 {
-	if (!GetWorld() || !BuildingClass)
+	if (!GetWorld() || (!GetActiveBuildingClass() && !GetActiveDefinition()))
 	{
 		return false;
 	}
@@ -221,10 +372,11 @@ bool ULoongBuildingSystemComponent::IsPlacementClearFiltered() const
 		QueryParams.AddIgnoredActor(PreviewActor);
 	}
 
+	const FVector2D FootprintHalfExtent = GetActiveFootprintHalfExtent();
 	const FCollisionShape Shape = FCollisionShape::MakeBox(
-		FVector(BuildingFootprintHalfExtent.X, BuildingFootprintHalfExtent.Y, BuildingHalfHeight));
+		FVector(FootprintHalfExtent.X, FootprintHalfExtent.Y, GetActiveBuildingHalfHeight()));
 	TArray<FOverlapResult> Overlaps;
-	if (!GetWorld()->OverlapMultiByChannel(Overlaps, CurrentPlacementLocation,
+	if (!GetWorld()->OverlapMultiByChannel(Overlaps, CurrentPlacementCenter,
 		CurrentPlacementRotation.Quaternion(), PlacementCollisionChannel, Shape, QueryParams))
 	{
 		return true;
@@ -233,7 +385,10 @@ bool ULoongBuildingSystemComponent::IsPlacementClearFiltered() const
 	for (const FOverlapResult& Overlap : Overlaps)
 	{
 		const AActor* HitActor = Overlap.GetActor();
-		if (HitActor && HitActor != PreviewActor && HitActor->IsA(BuildingClass))
+		const TSubclassOf<AActor> ActiveClass = GetActiveBuildingClass();
+		if (HitActor && HitActor != PreviewActor && ActiveClass && HitActor->IsA(ActiveClass)
+			&& UBuildPlacementLibrary::DoBuildingFootprintsOverlap(HitActor, CurrentPlacementCenter,
+				FootprintHalfExtent, CurrentPlacementRotation, 1.0f))
 		{
 			return false;
 		}
@@ -248,12 +403,70 @@ bool ULoongBuildingSystemComponent::IsInsideBaseBounds() const
 		return false;
 	}
 
-	FVector BoundsOrigin;
-	FVector BoundsExtent;
-	BaseGroundActor->GetActorBounds(true, BoundsOrigin, BoundsExtent);
-	return UBuildPlacementLibrary::IsWithinBaseBounds(CurrentPlacementLocation,
-		FVector2D(BoundsOrigin.X, BoundsOrigin.Y), FVector2D(BoundsExtent.X, BoundsExtent.Y),
-		BuildingFootprintHalfExtent, CurrentPlacementRotation.Yaw);
+	return UBuildPlacementLibrary::IsWithinBaseActorBounds(BaseGroundActor, CurrentPlacementCenter,
+		GetActiveFootprintHalfExtent(),
+		CurrentPlacementRotation.Yaw);
+}
+
+const FLoongBuildingDefinition* ULoongBuildingSystemComponent::GetActiveDefinition() const
+{
+	return BuildingDefinitions.IsValidIndex(SelectedBuildingIndex) && BuildingDefinitions[SelectedBuildingIndex].IsUsable()
+		? &BuildingDefinitions[SelectedBuildingIndex] : nullptr;
+}
+
+TSubclassOf<AActor> ULoongBuildingSystemComponent::GetActiveBuildingClass() const
+{
+	const FLoongBuildingDefinition* Definition = GetActiveDefinition();
+	return Definition && Definition->BuildingClass ? Definition->BuildingClass : BuildingClass;
+}
+
+int32 ULoongBuildingSystemComponent::GetActiveGridWidth() const
+{
+	const FLoongBuildingDefinition* Definition = GetActiveDefinition();
+	return Definition ? Definition->GridWidth : 1;
+}
+
+int32 ULoongBuildingSystemComponent::GetActiveGridHeight() const
+{
+	const FLoongBuildingDefinition* Definition = GetActiveDefinition();
+	return Definition ? Definition->GridHeight : 1;
+}
+
+FVector2D ULoongBuildingSystemComponent::GetActiveFootprintHalfExtent() const
+{
+	const FLoongBuildingDefinition* Definition = GetActiveDefinition();
+	return Definition
+		? FVector2D(0.5f * Definition->GridWidth * GridSize, 0.5f * Definition->GridHeight * GridSize)
+		: BuildingFootprintHalfExtent;
+}
+
+float ULoongBuildingSystemComponent::GetActiveBuildingHalfHeight() const
+{
+	const FLoongBuildingDefinition* Definition = GetActiveDefinition();
+	return Definition ? Definition->BuildingHeight * 0.5f : BuildingHalfHeight;
+}
+
+void ULoongBuildingSystemComponent::ResolveBaseGroundActor()
+{
+	if (BaseGroundActor || BaseGroundActorTag.IsNone() || !GetWorld())
+	{
+		return;
+	}
+
+	for (TActorIterator<AActor> ActorIterator(GetWorld()); ActorIterator; ++ActorIterator)
+	{
+		AActor* Candidate = *ActorIterator;
+		if (Candidate && Candidate->ActorHasTag(BaseGroundActorTag))
+		{
+			BaseGroundActor = Candidate;
+			UE_LOG(LogTemp, Log, TEXT("Loong building system resolved BaseGroundActor '%s' using tag '%s'."),
+				*Candidate->GetName(), *BaseGroundActorTag.ToString());
+			return;
+		}
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("Loong building system could not resolve BaseGroundActor using tag '%s'."),
+		*BaseGroundActorTag.ToString());
 }
 
 ECollisionChannel ULoongBuildingSystemComponent::ResolveGroundTraceChannel() const
@@ -271,6 +484,7 @@ void ULoongBuildingSystemComponent::ProcessDirectKeyboardInput()
 	const bool bBuildKeyDown = PlayerController->IsInputKeyDown(EKeys::B);
 	const bool bRotateKeyDown = PlayerController->IsInputKeyDown(EKeys::R);
 	const bool bPlaceKeyDown = PlayerController->IsInputKeyDown(EKeys::LeftMouseButton);
+	const FKey BuildingNumberKeys[4] = {EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four};
 
 	if (bBuildKeyDown && !bPreviousBuildKeyDown)
 	{
@@ -283,6 +497,15 @@ void ULoongBuildingSystemComponent::ProcessDirectKeyboardInput()
 	if (bBuildingMode && bPlaceKeyDown && !bPreviousPlaceKeyDown)
 	{
 		PlaceBuilding();
+	}
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(BuildingNumberKeys); ++Index)
+	{
+		const bool bNumberKeyDown = PlayerController->IsInputKeyDown(BuildingNumberKeys[Index]);
+		if (bBuildingMode && bNumberKeyDown && !bPreviousBuildingNumberKeyDown[Index])
+		{
+			SelectBuildingByIndex(Index);
+		}
+		bPreviousBuildingNumberKeyDown[Index] = bNumberKeyDown;
 	}
 
 	bPreviousBuildKeyDown = bBuildKeyDown;
