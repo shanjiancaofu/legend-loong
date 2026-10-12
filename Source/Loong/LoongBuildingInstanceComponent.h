@@ -4,6 +4,8 @@
 #include "Components/ActorComponent.h"
 #include "LoongBuildingInstanceComponent.generated.h"
 
+class ULoongBuildingSystemComponent;
+
 /** Runtime identity attached to buildings created by the C++ building system. */
 UCLASS(ClassGroup=(Loong), meta=(BlueprintSpawnableComponent))
 class LOONG_API ULoongBuildingInstanceComponent : public UActorComponent
@@ -11,6 +13,9 @@ class LOONG_API ULoongBuildingInstanceComponent : public UActorComponent
 	GENERATED_BODY()
 
 public:
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Loong|Building") FGuid InstanceId;
+ UPROPERTY(Transient) TWeakObjectPtr<ULoongBuildingSystemComponent> ManagingSystem;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Loong|Building")
 	FName BuildingId = NAME_None;
 };

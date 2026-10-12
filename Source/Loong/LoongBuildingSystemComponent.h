@@ -4,25 +4,36 @@
 #include "Components/ActorComponent.h"
 #include "LoongBuildingTypes.h"
 #include "LoongBuildingMenuWidget.h"
+#include "LoongBuildingConfirmWidget.h"
 #include "LoongBuildingSystemComponent.generated.h"
 
 class UMaterialInterface;
 class UStaticMesh;
 class ULoongBuildingMenuWidget;
+class ULoongBuildingConfirmWidget;
 class UMeshComponent;
 
+USTRUCT()
 struct FLoongSelectedMaterialState
 {
-	TObjectPtr<UMeshComponent> Mesh = nullptr;
-	TArray<TObjectPtr<UMaterialInterface>> Materials;
+ GENERATED_BODY()
+ UPROPERTY() TObjectPtr<UMeshComponent> Mesh = nullptr;
+ UPROPERTY() TArray<TObjectPtr<UMaterialInterface>> Materials;
+ UPROPERTY() TObjectPtr<UMaterialInterface> Overlay = nullptr;
+ bool bCustomDepth = false;
+ int32 Stencil = 0;
 };
+
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FLoongBuildingChanged, FGuid, InstanceId, FName, BuildingId, FTransform, Transform);
 
 UENUM(BlueprintType)
 enum class ELoongBuildingInteractionState : uint8
 {
 	Default,
+	Selected,
 	Building,
-	Moving
+	Moving,
+	DeleteConfirmation
 };
 
 /**
@@ -113,6 +124,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Loong|Building|Mode")
 	bool IsMovingBuilding() const { return bMovingBuilding; }
+	UFUNCTION(BlueprintPure, Category="Loong|Building|Mode") bool IsDeleteConfirmationOpen() const { return bDeleteConfirmationOpen; }
+	UFUNCTION(BlueprintCallable, Category="Loong|Building|Delete") void ConfirmDeleteSelectedBuilding();
+	UFUNCTION(BlueprintCallable, Category="Loong|Building|Delete") void CancelDeletePrompt();
 
 	UFUNCTION(BlueprintCallable, Category="Loong|Building|Placement")
 	void RotateBuilding();
@@ -143,8 +157,26 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
+public:
+ UFUNCTION(BlueprintPure, Category="Loong|Building") ELoongBuildingInteractionState GetInteractionState() const;
+ UFUNCTION(BlueprintPure, Category="Loong|Building") AActor* GetSelectedActor() const { return SelectedBuildingActor; }
+ UFUNCTION(BlueprintPure, Category="Loong|Building") FLoongBuildingDefinition GetSelectedDefinition() const;
+ UFUNCTION(BlueprintCallable, Category="Loong|Building") void SelectBuildingActor(AActor* Actor);
+ UFUNCTION(BlueprintCallable, Category="Loong|Building") void ClearSelectedBuilding();
+ UFUNCTION(BlueprintCallable, Category="Loong|Building") void BeginMoveSelectedBuilding();
+ UFUNCTION(BlueprintCallable, Category="Loong|Building") bool ConfirmMoveBuilding();
+ UFUNCTION(BlueprintCallable, Category="Loong|Building") void CancelMoveBuilding();
+ UFUNCTION(BlueprintCallable, Category="Loong|Building") void RequestDeleteSelectedBuilding();
+ UPROPERTY(BlueprintAssignable) FLoongBuildingChanged OnBuildingPlaced;
+ UPROPERTY(BlueprintAssignable) FLoongBuildingChanged OnBuildingMoved;
+ UPROPERTY(BlueprintAssignable) FLoongBuildingChanged OnBuildingDemolished;
 private:
-	void UpdatePreview();
+ friend class FLoongBuildingInteractionTest;
+ void FinishMoveBuilding(bool bConfirm);
+ bool IsPointerOverBuildingUI() const;
+ void RefreshOperationPanel();
+ void NotifyChange(AActor* Actor, FLoongBuildingChanged& Event);
+ void UpdatePreview();
 	void CreatePreviewActor();
 	void DestroyPreviewActor();
 	void SetPreviewMaterial(UMaterialInterface* Material);
@@ -153,17 +185,20 @@ private:
 	void ShowBuildingMenu();
 	void HideBuildingMenu();
 	void ProcessSelectionInput();
-	void BeginMoveSelectedBuilding();
-	bool ConfirmMoveBuilding();
-	void CancelMoveBuilding();
+
+	void ShowDeletePrompt();
+	void HideDeletePrompt();
+
+
+
 	void UpdateMovingBuilding();
 	void CaptureAndSetActorMaterial(AActor* Actor, UMaterialInterface* Material,
 		TArray<FLoongSelectedMaterialState>& OutStates);
 	void RestoreMaterialStates(TArray<FLoongSelectedMaterialState>& States);
 	bool TraceMouseToBuilding(FHitResult& OutHit) const;
 	bool IsManagedBuildingActor(const AActor* Actor) const;
-	void SelectBuildingActor(AActor* Actor);
-	void ClearSelectedBuilding();
+
+
 	const FLoongBuildingDefinition* GetActiveDefinition() const;
 	TSubclassOf<AActor> GetActiveBuildingClass() const;
 	FVector2D GetActiveFootprintHalfExtent() const;
@@ -185,21 +220,29 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<ULoongBuildingMenuWidget> BuildingMenuWidget;
+	UPROPERTY(Transient) TObjectPtr<ULoongBuildingConfirmWidget> DeletePromptWidget;
+ UPROPERTY(Transient) TObjectPtr<ULoongBuildingConfirmWidget> OperationPanelWidget;
+ TWeakObjectPtr<AActor> PendingDeleteActor;
+ bool bSuppressSceneClickUntilRelease = false;
+ bool bEndingPlay = false;
 
 	UPROPERTY(Transient)
 	TObjectPtr<AActor> SelectedBuildingActor;
 
-	TArray<FLoongSelectedMaterialState> SelectedMaterialStates;
+	UPROPERTY(Transient) TArray<FLoongSelectedMaterialState> SelectedMaterialStates;
 
 	UPROPERTY(Transient)
 	TObjectPtr<AActor> MovingBuildingActor;
 
 	FTransform MovingOriginalTransform;
-	TArray<FLoongSelectedMaterialState> MovingMaterialStates;
+	UPROPERTY(Transient) TArray<FLoongSelectedMaterialState> MovingMaterialStates;
+ bool bMovingOriginalCollision = true;
 	bool bMovingBuilding = false;
+	bool bDeleteConfirmationOpen = false;
 	bool bMovingPlacementValid = false;
 	bool bPreviousMoveKeyDown = false;
 	bool bPreviousEscapeKeyDown = false;
+	bool bPreviousDeleteKeyDown = false;
 
 	FVector CurrentPlacementLocation = FVector::ZeroVector;
 	FVector CurrentPlacementCenter = FVector::ZeroVector;

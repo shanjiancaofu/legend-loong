@@ -11,3 +11,5 @@ void ULoongBuildingMenuButton::HandleClicked()
 {
 	OnBuildingClicked.Broadcast(BuildingId);
 }
+
+ULoongBuildingMenuButton::ULoongBuildingMenuButton() { InitIsFocusable(false); }

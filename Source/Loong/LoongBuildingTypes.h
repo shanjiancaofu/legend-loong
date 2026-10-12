@@ -6,6 +6,7 @@
 
 class UMaterialInterface;
 class UStaticMesh;
+class UTexture2D;
 
 UENUM(BlueprintType)
 enum class ELoongBuildingCategory : uint8
@@ -40,6 +41,13 @@ struct LOONG_API FLoongBuildingDefinition
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Identity")
 	FText DisplayName;
+
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Presentation")
+ TObjectPtr<UTexture2D> Icon;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Presentation", meta=(MultiLine="true"))
+ FText Description;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Presentation")
+ bool bUnlocked = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Footprint", meta=(ClampMin="1"))
 	int32 GridWidth = 1;

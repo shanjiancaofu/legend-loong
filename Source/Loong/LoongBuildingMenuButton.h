@@ -12,6 +12,7 @@ class LOONG_API ULoongBuildingMenuButton : public UButton
 	GENERATED_BODY()
 
 public:
+ ULoongBuildingMenuButton();
 	UPROPERTY(BlueprintAssignable, Category="Loong|Building|Menu")
 	FLoongBuildingMenuButtonClicked OnBuildingClicked;
 
