@@ -9,19 +9,20 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FLoongBuildingMenuButtonClicked, FNa
 UCLASS()
 class LOONG_API ULoongBuildingMenuButton : public UButton
 {
-	GENERATED_BODY()
+    GENERATED_BODY()
 
 public:
- ULoongBuildingMenuButton();
-	UPROPERTY(BlueprintAssignable, Category="Loong|Building|Menu")
-	FLoongBuildingMenuButtonClicked OnBuildingClicked;
+    ULoongBuildingMenuButton();
 
-	void SetBuildingId(FName InBuildingId);
+    UPROPERTY(BlueprintAssignable, Category = "Loong|Building|Menu")
+    FLoongBuildingMenuButtonClicked OnBuildingClicked;
+
+    void SetBuildingId(FName InBuildingId);
 
 private:
-	UPROPERTY(Transient)
-	FName BuildingId = NAME_None;
+    UPROPERTY(Transient)
+    FName BuildingId = NAME_None;
 
-	UFUNCTION()
-	void HandleClicked();
+    UFUNCTION()
+    void HandleClicked();
 };

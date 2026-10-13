@@ -2,14 +2,17 @@
 
 void ULoongBuildingMenuButton::SetBuildingId(const FName InBuildingId)
 {
-	BuildingId = InBuildingId;
-	OnClicked.RemoveAll(this);
-	OnClicked.AddDynamic(this, &ULoongBuildingMenuButton::HandleClicked);
+    BuildingId = InBuildingId;
+    OnClicked.RemoveAll(this);
+    OnClicked.AddDynamic(this, &ULoongBuildingMenuButton::HandleClicked);
 }
 
 void ULoongBuildingMenuButton::HandleClicked()
 {
-	OnBuildingClicked.Broadcast(BuildingId);
+    OnBuildingClicked.Broadcast(BuildingId);
 }
 
-ULoongBuildingMenuButton::ULoongBuildingMenuButton() { InitIsFocusable(false); }
+ULoongBuildingMenuButton::ULoongBuildingMenuButton()
+{
+    InitIsFocusable(false);
+}

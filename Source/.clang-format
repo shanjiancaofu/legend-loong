@@ -1,0 +1,29 @@
+BasedOnStyle: Microsoft
+Language: Cpp
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 110
+BreakBeforeBraces: Allman
+AllowShortBlocksOnASingleLine: Never
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+AllowShortLambdasOnASingleLine: None
+SortIncludes: Never
+IncludeBlocks: Preserve
+PointerAlignment: Left
+SpaceBeforeParens: ControlStatements
+SeparateDefinitionBlocks: Leave
+StatementMacros:
+  - UPROPERTY
+  - UFUNCTION
+  - GENERATED_BODY
+  - UCLASS
+  - USTRUCT
+  - UENUM
+AccessModifierOffset: -4
+BreakStringLiterals: false
+FixNamespaceComments: false
+ReflowComments: Never
