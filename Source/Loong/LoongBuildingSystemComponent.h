@@ -3,8 +3,10 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "LoongBuildingTypes.h"
+#include "LoongBaseSaveGame.h"
 #include "LoongBuildingMenuWidget.h"
 #include "LoongBuildingConfirmWidget.h"
+#include "LoongBaseSaveWidget.h"
 #include "LoongBuildingSystemComponent.generated.h"
 
 class UMaterialInterface;
@@ -158,6 +160,16 @@ protected:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 public:
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Loong|Save") bool bEnableBasePersistence = true;
+ UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Loong|Save") FString BaseIdentifierOverride;
+ FString GetBaseMapIdentifier() const;
+ bool ExportCommittedBuildings(TArray<FLoongSavedBuilding>& OutBuildings) const;
+ bool RestoreBuildings(const TArray<FLoongSavedBuilding>& Buildings);
+ bool ClearManagedBuildings();
+ bool HasBuildingDefinition(FName Id) const;
+ void SuppressSceneClickForUI() { bSuppressSceneClickUntilRelease = true; }
+ bool HasPendingBuildingEdit() const { return bMovingBuilding || bDeleteConfirmationOpen; }
+public:
  UFUNCTION(BlueprintPure, Category="Loong|Building") ELoongBuildingInteractionState GetInteractionState() const;
  UFUNCTION(BlueprintPure, Category="Loong|Building") AActor* GetSelectedActor() const { return SelectedBuildingActor; }
  UFUNCTION(BlueprintPure, Category="Loong|Building") FLoongBuildingDefinition GetSelectedDefinition() const;
@@ -172,8 +184,10 @@ public:
  UPROPERTY(BlueprintAssignable) FLoongBuildingChanged OnBuildingDemolished;
 private:
  friend class FLoongBuildingInteractionTest;
+ friend class FLoongBasePersistenceTest;
  void FinishMoveBuilding(bool bConfirm);
  bool IsPointerOverBuildingUI() const;
+ bool IsSaveConfirmationOpen() const;
  void RefreshOperationPanel();
  void NotifyChange(AActor* Actor, FLoongBuildingChanged& Event);
  void UpdatePreview();
@@ -222,9 +236,11 @@ private:
 	TObjectPtr<ULoongBuildingMenuWidget> BuildingMenuWidget;
 	UPROPERTY(Transient) TObjectPtr<ULoongBuildingConfirmWidget> DeletePromptWidget;
  UPROPERTY(Transient) TObjectPtr<ULoongBuildingConfirmWidget> OperationPanelWidget;
+ UPROPERTY(Transient) TObjectPtr<ULoongBaseSaveWidget> BaseSaveWidget;
  TWeakObjectPtr<AActor> PendingDeleteActor;
  bool bSuppressSceneClickUntilRelease = false;
  bool bEndingPlay = false;
+ bool bRestoringBuildings = false;
 
 	UPROPERTY(Transient)
 	TObjectPtr<AActor> SelectedBuildingActor;

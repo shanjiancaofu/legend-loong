@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "LoongBaseSaveGame.h"
 #include "LoongBuildingInstanceComponent.generated.h"
 
 class ULoongBuildingSystemComponent;
@@ -18,4 +19,6 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Loong|Building")
 	FName BuildingId = NAME_None;
+ UPROPERTY(VisibleAnywhere, BlueprintReadOnly) FLoongSavedBuildingState PersistentState;
+ UPROPERTY(Transient) FString OwningBaseIdentifier;
 };

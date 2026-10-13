@@ -2,6 +2,9 @@
 
 #include "BuildPlacementLibrary.h"
 #include "LoongBuildingInstanceComponent.h"
+#include "LoongBaseSaveSubsystem.h"
+#include "Engine/GameInstance.h"
+#include "GameFramework/GameModeBase.h"
 #include "LoongBuildingMenuWidget.h"
 #include "LoongBuildingConfirmWidget.h"
 #include "CollisionQueryParams.h"
@@ -55,6 +58,8 @@ ULoongBuildingSystemComponent::ULoongBuildingSystemComponent()
 void ULoongBuildingSystemComponent::BeginPlay()
 {
 	Super::BeginPlay();
+ if(GetWorld() && GetWorld()->GetAuthGameMode() && (GetWorld()->GetAuthGameMode()->ActorHasTag(TEXT("LoongCombatMode")) || GetWorld()->GetAuthGameMode()->ActorHasTag(TEXT("LoongCombatArtTest"))))
+ {bEnableBasePersistence=false;bEnableDirectKeyboardInput=false;bStartInBuildMode=false;SetComponentTickEnabled(false);return;}
 
 	if (const APawn* PawnOwner = Cast<APawn>(GetOwner()))
 	{
@@ -65,8 +70,15 @@ void ULoongBuildingSystemComponent::BeginPlay()
 		PlayerController = GetWorld()->GetFirstPlayerController();
 	}
 	ResolveBaseGroundActor();
+ if (bEnableBasePersistence && GetWorld() && GetWorld()->GetGameInstance())
+  GetWorld()->GetGameInstance()->GetSubsystem<ULoongBaseSaveSubsystem>()->RegisterBuildingSystem(this);
 
-	if (bStartInBuildMode)
+	if (bEnableBasePersistence && PlayerController && PlayerController->GetLocalPlayer())
+ {
+  BaseSaveWidget=CreateWidget<ULoongBaseSaveWidget>(PlayerController);
+  if(BaseSaveWidget){BaseSaveWidget->InitializePanel(this);BaseSaveWidget->AddToViewport(400);}
+ }
+ if (bStartInBuildMode)
 	{
 		SetBuildingMode(true);
 	}
@@ -75,6 +87,9 @@ void ULoongBuildingSystemComponent::BeginPlay()
 void ULoongBuildingSystemComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	bEndingPlay = true;
+ if(BaseSaveWidget){BaseSaveWidget->RemoveFromParent();BaseSaveWidget=nullptr;}
+ if (bEnableBasePersistence && GetWorld() && GetWorld()->GetGameInstance())
+  GetWorld()->GetGameInstance()->GetSubsystem<ULoongBaseSaveSubsystem>()->UnregisterBuildingSystem(this);
  if (bMovingBuilding)
 	{
 		CancelMoveBuilding();
@@ -120,7 +135,7 @@ void ULoongBuildingSystemComponent::ToggleBuildingMode()
 
 void ULoongBuildingSystemComponent::SetBuildingMode(const bool bEnabled)
 {
-	if (bMovingBuilding || bDeleteConfirmationOpen)
+	if (bMovingBuilding || bDeleteConfirmationOpen || IsSaveConfirmationOpen())
 	{
 		return;
 	}
@@ -157,7 +172,7 @@ void ULoongBuildingSystemComponent::RotateBuilding()
 
 bool ULoongBuildingSystemComponent::SelectBuildingByIndex(const int32 DefinitionIndex)
 {
-	if (bMovingBuilding || bDeleteConfirmationOpen || !BuildingDefinitions.IsValidIndex(DefinitionIndex) || !BuildingDefinitions[DefinitionIndex].IsUsable() || !BuildingDefinitions[DefinitionIndex].bUnlocked)
+	if (bMovingBuilding || bDeleteConfirmationOpen || IsSaveConfirmationOpen() || !BuildingDefinitions.IsValidIndex(DefinitionIndex) || !BuildingDefinitions[DefinitionIndex].IsUsable() || !BuildingDefinitions[DefinitionIndex].bUnlocked)
 	{
 		return false;
 	}
@@ -276,6 +291,7 @@ AActor* ULoongBuildingSystemComponent::SpawnBuildingActor(const FTransform& Spaw
 	}
 
 	ApplyActiveDefinitionVisuals(BuildingActor, bForPreview);
+ BuildingActor->SetActorTransform(SpawnTransform);
 	if (!bForPreview)
 	{
 		ULoongBuildingInstanceComponent* InstanceComponent = NewObject<ULoongBuildingInstanceComponent>(
@@ -283,6 +299,7 @@ AActor* ULoongBuildingSystemComponent::SpawnBuildingActor(const FTransform& Spaw
 		InstanceComponent->BuildingId = GetSelectedBuildingId();
   InstanceComponent->InstanceId = FGuid::NewGuid();
   InstanceComponent->ManagingSystem = this;
+ InstanceComponent->OwningBaseIdentifier = GetBaseMapIdentifier();
   BuildingActor->AddInstanceComponent(InstanceComponent);
 		InstanceComponent->RegisterComponent();
 		BuildingActor->Tags.AddUnique(TEXT("LoongPlacedBuilding"));
@@ -446,7 +463,7 @@ void ULoongBuildingSystemComponent::HideDeletePrompt()
 void ULoongBuildingSystemComponent::RequestDeleteSelectedBuilding()
 {
  bSuppressSceneClickUntilRelease = true;
-	if (!bBuildingMode && !bMovingBuilding && SelectedBuildingActor && IsManagedBuildingActor(SelectedBuildingActor)) ShowDeletePrompt();
+	if (!IsSaveConfirmationOpen() && !bBuildingMode && !bMovingBuilding && SelectedBuildingActor && IsManagedBuildingActor(SelectedBuildingActor)) ShowDeletePrompt();
 }
 
 void ULoongBuildingSystemComponent::CancelDeletePrompt() { HideDeletePrompt(); RefreshOperationPanel(); }
@@ -612,7 +629,7 @@ void ULoongBuildingSystemComponent::RestoreMaterialStates(TArray<FLoongSelectedM
 void ULoongBuildingSystemComponent::BeginMoveSelectedBuilding()
 {
  bSuppressSceneClickUntilRelease = true;
- if (bDeleteConfirmationOpen) return;
+ if (bDeleteConfirmationOpen || IsSaveConfirmationOpen()) return;
 	if (bBuildingMode || bMovingBuilding || !SelectedBuildingActor || !IsManagedBuildingActor(SelectedBuildingActor))
 	{
 		return;
@@ -890,7 +907,14 @@ void ULoongBuildingSystemComponent::ProcessDirectKeyboardInput()
 	const bool bDeleteKeyDown = PlayerController->IsInputKeyDown(EKeys::Delete);
 	const FKey BuildingNumberKeys[4] = {EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four};
 
-	if (bEscapeKeyDown && !bPreviousEscapeKeyDown)
+	if (IsSaveConfirmationOpen())
+ {
+  if(bEscapeKeyDown && !bPreviousEscapeKeyDown){BaseSaveWidget->CancelConfirmation();bSuppressSceneClickUntilRelease=true;}
+  bPreviousBuildKeyDown=bBuildKeyDown;bPreviousMoveKeyDown=bMoveKeyDown;bPreviousRotateKeyDown=bRotateKeyDown;
+  bPreviousPlaceKeyDown=bPlaceKeyDown;bPreviousEscapeKeyDown=bEscapeKeyDown;bPreviousDeleteKeyDown=bDeleteKeyDown;
+  return;
+ }
+ if (bEscapeKeyDown && !bPreviousEscapeKeyDown)
 	{
  bSuppressSceneClickUntilRelease = true;
 		if (bDeleteConfirmationOpen)
@@ -970,6 +994,7 @@ FLoongBuildingDefinition ULoongBuildingSystemComponent::GetSelectedDefinition() 
 }
 void ULoongBuildingSystemComponent::NotifyChange(AActor* Actor, FLoongBuildingChanged& Event)
 {
+ if (bRestoringBuildings) return;
  if (IsValid(Actor)) if (const auto* I = Actor->FindComponentByClass<ULoongBuildingInstanceComponent>())
   Event.Broadcast(I->InstanceId, I->BuildingId, Actor->GetActorTransform());
 }
@@ -984,7 +1009,85 @@ void ULoongBuildingSystemComponent::RefreshOperationPanel()
 }
 bool ULoongBuildingSystemComponent::IsPointerOverBuildingUI() const
 {
- if (bDeleteConfirmationOpen) return true;
+ if (bDeleteConfirmationOpen || IsSaveConfirmationOpen()) return true;
  const auto Over = [](const auto* W) { return W && W->IsInViewport() && W->IsPointerOverPanel(); };
- return Over(BuildingMenuWidget.Get()) || Over(OperationPanelWidget.Get());
+ return Over(BuildingMenuWidget.Get()) || Over(OperationPanelWidget.Get()) || Over(BaseSaveWidget.Get());
 }
+
+FString ULoongBuildingSystemComponent::GetBaseMapIdentifier() const
+{
+ if (!BaseIdentifierOverride.IsEmpty()) return BaseIdentifierOverride;
+ if (!GetWorld()) return FString();
+ FString Name = GetWorld()->GetOutermost()->GetName();
+ if (!GetWorld()->StreamingLevelsPrefix.IsEmpty()) Name.ReplaceInline(*GetWorld()->StreamingLevelsPrefix, TEXT(""));
+ return Name;
+}
+bool ULoongBuildingSystemComponent::HasBuildingDefinition(FName Id) const
+{
+ return BuildingDefinitions.ContainsByPredicate([Id](const FLoongBuildingDefinition& D){ return D.IsUsable() && D.BuildingId == Id; });
+}
+bool ULoongBuildingSystemComponent::ExportCommittedBuildings(TArray<FLoongSavedBuilding>& OutBuildings) const
+{
+ OutBuildings.Reset(); if (!GetWorld()) return false;
+ TSet<FGuid> Seen;
+ for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+ {
+  auto* I = It->FindComponentByClass<ULoongBuildingInstanceComponent>();
+  if (!I || I->ManagingSystem.Get() != this || It->IsActorBeingDestroyed()) continue;
+  if (!I->InstanceId.IsValid() || Seen.Contains(I->InstanceId) || !HasBuildingDefinition(I->BuildingId)) return false;
+  Seen.Add(I->InstanceId);
+  FLoongSavedBuilding R; R.InstanceGuid = I->InstanceId; R.BuildingId = I->BuildingId;
+  R.Transform = (*It == MovingBuildingActor) ? MovingOriginalTransform : It->GetActorTransform();
+  R.State = I->PersistentState; OutBuildings.Add(R);
+ }
+ return true;
+}
+bool ULoongBuildingSystemComponent::ClearManagedBuildings()
+{
+ if (!GetWorld() || HasPendingBuildingEdit()) return false;
+ SetBuildingMode(false); ClearSelectedBuilding();
+ TArray<AActor*> Remove;
+ for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+  if (auto* I = It->FindComponentByClass<ULoongBuildingInstanceComponent>())
+   if (I->ManagingSystem.Get() == this && *It != BaseGroundActor && *It != GetOwner()) Remove.Add(*It);
+ for (AActor* A : Remove) A->Destroy();
+ return true;
+}
+bool ULoongBuildingSystemComponent::RestoreBuildings(const TArray<FLoongSavedBuilding>& Buildings)
+{
+ if (!GetWorld() || HasPendingBuildingEdit()) return false;
+ TArray<AActor*> Staged;
+ const int32 PreviousIndex = SelectedBuildingIndex;
+ bRestoringBuildings = true;
+ for (const auto& R : Buildings)
+ {
+  SelectedBuildingIndex = BuildingDefinitions.IndexOfByPredicate([&R](const FLoongBuildingDefinition& D){ return D.IsUsable() && D.BuildingId == R.BuildingId; });
+  if (SelectedBuildingIndex == INDEX_NONE) break;
+  const auto* Definition = GetActiveDefinition();
+  UClass* RestoreClass = GetActiveBuildingClass().Get();
+  if ((RestoreClass && RestoreClass->HasAnyClassFlags(CLASS_Abstract)) || (!RestoreClass && (!Definition || !Definition->BuildingMesh))) break;
+  AActor* A = SpawnBuildingActor(R.Transform, false);
+  if (!IsValid(A)) break;
+  // Actor Transform includes pivot and scale already; do not grid-snap it again.
+  A->SetActorTransform(R.Transform);
+  auto* I = A->FindComponentByClass<ULoongBuildingInstanceComponent>();
+  if (!I) { A->Destroy(); break; }
+  I->InstanceId = R.InstanceGuid; I->PersistentState = R.State;
+  Staged.Add(A);
+ }
+ SelectedBuildingIndex = PreviousIndex;
+ if (Staged.Num() != Buildings.Num())
+ {
+  for (AActor* A : Staged) A->Destroy();
+  bRestoringBuildings = false; return false;
+ }
+ SetBuildingMode(false); ClearSelectedBuilding();
+ TArray<AActor*> Old;
+ for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+  if (!Staged.Contains(*It)) if (auto* I = It->FindComponentByClass<ULoongBuildingInstanceComponent>())
+   if (I->ManagingSystem.Get() == this && *It != BaseGroundActor && *It != GetOwner()) Old.Add(*It);
+ for (AActor* A : Old) A->Destroy();
+ bRestoringBuildings = false; return true;
+}
+
+bool ULoongBuildingSystemComponent::IsSaveConfirmationOpen() const { return BaseSaveWidget && BaseSaveWidget->IsConfirmationOpen(); }
