@@ -1,0 +1,10 @@
+{
+  "Quick": ["Loong.Combat.Calculation.", "Loong.Combat.Status.", "Loong.Building.Grid."],
+  "Combat": ["Loong.Combat."],
+  "Elements": ["Loong.Combat.Status.", "Loong.Combat.Phase6.", "Loong.Combat.P001A."],
+  "Building": ["Loong.Building."],
+  "Grid": ["Loong.Building.Grid."],
+  "Persistence": ["Loong.Building.Persistence."],
+  "Camera": ["Loong.Combat.Camera."],
+  "Full": ["Loong."]
+}

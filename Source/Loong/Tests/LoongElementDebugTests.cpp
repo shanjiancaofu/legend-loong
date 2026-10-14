@@ -61,8 +61,8 @@ bool FLoongElementDebugTest::RunTest(const FString& Parameters)
         }
     }
     const int32 OldDebug = DebugCVar->GetInt(), OldTest = TestCVar->GetInt();
-    DebugCVar->Set(0, ECVF_SetByCode);
-    TestCVar->Set(0, ECVF_SetByCode);
+    DebugCVar->SetWithCurrentPriority(0);
+    TestCVar->SetWithCurrentPriority(0);
     const auto Init = UWorld::InitializationValues()
                           .AllowAudioPlayback(false)
                           .RequiresHitProxies(false)
@@ -90,7 +90,7 @@ bool FLoongElementDebugTest::RunTest(const FString& Parameters)
                                                                   Summary.Contains(TEXT("WindDragonTest")));
     auto* E = D->SpawnEnemyOfType(TEXT("MeleeTest"), FVector(300, 0, 100));
     TestNotNull(TEXT("PIE-type spawned enemy has element component"), E->Elements.Get());
-    TestCVar->Set(1, ECVF_SetByCode);
+    TestCVar->SetWithCurrentPriority(1);
     const float Before = E->Health->CurrentHealth;
     D->ApplyHit(E, Pawn, 25, true);
     TestEqual(TEXT("Observation test keeps target alive with one direct damage"), E->Health->CurrentHealth,
@@ -124,7 +124,7 @@ bool FLoongElementDebugTest::RunTest(const FString& Parameters)
              D->GetElementDebugSummary().Contains(TEXT("no equipped element modules")));
     TestEqual(TEXT("Test mode did not mutate combat asset damage"), D->Definition->HeroStats.AttackDamage,
               25.f);
-    TestCVar->Set(0, ECVF_SetByCode);
+    TestCVar->SetWithCurrentPriority(0);
     const float NormalBefore = E->Health->CurrentHealth;
     D->ApplyHit(E, Pawn, 25, true);
     TestTrue(TEXT("Normal mode restores full direct damage"), E->Health->CurrentHealth <= NormalBefore - 25);
@@ -133,8 +133,8 @@ bool FLoongElementDebugTest::RunTest(const FString& Parameters)
     GEngine->DestroyWorldContext(W);
     W->DestroyWorld(false);
     W->RemoveFromRoot();
-    DebugCVar->Set(OldDebug, ECVF_SetByCode);
-    TestCVar->Set(OldTest, ECVF_SetByCode);
+    DebugCVar->SetWithCurrentPriority(OldDebug);
+    TestCVar->SetWithCurrentPriority(OldTest);
     return true;
 }
 #endif
