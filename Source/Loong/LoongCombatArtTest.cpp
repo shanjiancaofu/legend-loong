@@ -31,6 +31,20 @@ FVector ALoongArtTestCamera::ComputeCameraLocation(FVector Focus, float Pitch, f
     return Focus - FRotator(Pitch, Yaw, 0).Vector() * FMath::Max(100.f, Distance);
 }
 
+void ALoongArtTestCamera::SynchronizePawnMovementCamera(APawn* Pawn, FRotator ViewRotation)
+{
+    if (!IsValid(Pawn) || ViewRotation.ContainsNaN())
+        return;
+    // BP_TopDownCharacter derives IA_Move directions from its Camera component's world yaw.
+    // The independent combat camera must supply that same basis even while the pawn turns.
+    if (auto* InputCamera = Pawn->FindComponentByClass<UCameraComponent>())
+    {
+        InputCamera->SetAbsolute(InputCamera->IsUsingAbsoluteLocation(), true,
+                                 InputCamera->IsUsingAbsoluteScale());
+        InputCamera->SetWorldRotation(ViewRotation);
+    }
+}
+
 void ALoongArtTestCamera::ApplyCamera(FVector Focus)
 {
     const FRotator Rotation(FMath::Clamp(CameraPitch, -85.f, -15.f), CameraYaw, 0);
@@ -70,6 +84,7 @@ void ALoongArtTestCamera::Tick(float DeltaTime)
     if (bFollowPlayer)
         FocusActor = LocalController->GetPawn();
     ApplyCamera(IsValid(FocusActor) ? FocusActor->GetActorLocation() + FocusOffset : FocusOffset);
+    SynchronizePawnMovementCamera(LocalController->GetPawn(), GetActorRotation());
     LocalController->bAutoManageActiveCameraTarget = false;
     if (LocalController->GetViewTarget() != this)
         LocalController->SetViewTarget(this);

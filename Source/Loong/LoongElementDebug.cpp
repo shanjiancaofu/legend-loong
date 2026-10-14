@@ -16,7 +16,7 @@ TAutoConsoleVariable<int32> TestEnabled(
         "PIE/Game test only: guarantee configured element hits, lower direct hit damage and skill cooldown. Does not equip missing dragons or change assets."));
 TAutoConsoleVariable<float> DebugInterval(TEXT("Loong.Elements.DrawInterval"), 0.2f,
                                           TEXT("World debug redraw seconds (clamped 0.1..2)."));
-TAutoConsoleVariable<int32> DebugTargets(TEXT("Loong.Elements.MaxTargets"), 12,
+TAutoConsoleVariable<int32> DebugTargets(TEXT("Loong.Elements.MaxTargets"), 1,
                                          TEXT("Max marked enemies in a world (clamped 1..30)."));
 #endif
 }

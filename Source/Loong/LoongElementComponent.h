@@ -7,6 +7,7 @@
 class ALoongCombatDirector;
 class ULoongCombatHealthComponent;
 class UNiagaraComponent;
+class UInstancedStaticMeshComponent;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FLoongElementChanged, FName, EffectId, int32, Stacks);
 USTRUCT()
 struct FLoongActiveElement
@@ -30,6 +31,11 @@ struct FLoongActiveElement
 
     UPROPERTY()
     TObjectPtr<UNiagaraComponent> Visual;
+
+    UPROPERTY()
+    TObjectPtr<UInstancedStaticMeshComponent> FallbackVisual;
+    float VisualTime = 0.f;
+    FString VisualDiagnostic;
 };
 /** Updates in combat time only. Uses existing health and registered targets. */
 UCLASS(ClassGroup = (Loong), meta = (BlueprintSpawnableComponent))
@@ -71,6 +77,7 @@ public:
     }
 
     void AdvanceCombatTime(float DeltaSeconds);
+    void SetVisualsPaused(bool bPaused);
     FString BuildDebugText() const;
     FString LastApplyDiagnostic;
     int32 SuccessfulApplications = 0;
@@ -87,6 +94,17 @@ protected:
 private:
     UPROPERTY()
     TArray<FLoongActiveElement> Active;
+
+    UPROPERTY()
+    TObjectPtr<UStaticMesh> FallbackSphere;
+
+    UPROPERTY()
+    TObjectPtr<UStaticMesh> FallbackCone;
+
+    UPROPERTY()
+    TObjectPtr<UMaterialInterface> FallbackMaterial;
+    void CreateVisual(FLoongActiveElement& Effect);
+    void UpdateVisual(FLoongActiveElement& Effect);
     void ApplyPeriodic(const FLoongActiveElement& Effect);
     void RemoveAt(int32 Index);
 };

@@ -113,6 +113,17 @@ struct LOONG_API FLoongElementEffect
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite)
     TSoftObjectPtr<UNiagaraSystem> VisualEffect;
+
+    /** Visible prototype feedback when no Niagara component can be spawned. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    bool bUseFallbackVisual = true;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    FVector VisualOffset = FVector(0, 0, 30);
+
+    /** World scale, independent of the target mesh/root scale. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite)
+    FVector VisualScale = FVector::OneVector;
     bool IsValid() const;
 };
 USTRUCT(BlueprintType)

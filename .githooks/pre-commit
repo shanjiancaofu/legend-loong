@@ -1,10 +1,10 @@
 #!/bin/sh
-# Check staged source bytes. Never edit or stage files during a commit.
+# Standard pre-commit runner; it protects unstaged edits and never stages fixes.
 if command -v python >/dev/null 2>&1; then
-    exec python Tools/check_cpp_format.py --staged
+    exec python -m pre_commit run --hook-stage pre-commit
 elif command -v python3 >/dev/null 2>&1; then
-    exec python3 Tools/check_cpp_format.py --staged
+    exec python3 -m pre_commit run --hook-stage pre-commit
 else
-    echo "Loong pre-commit: Python is required to check staged C++ formatting." >&2
+    echo "Loong pre-commit: Python and pre-commit are required." >&2
     exit 1
 fi

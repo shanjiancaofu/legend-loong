@@ -1,6 +1,6 @@
-"""Read-only format gate for staged C++ with the staged Source/.clang-format.
+"""clang-format entry for pre-commit; --staged retains the legacy read-only check.
 Set CLANG_FORMAT to override executable discovery. Requires clang-format 22+.
-Never formats/stages working files, and supports partial staging and paths with spaces.
+--fix formats the files supplied by pre-commit; neither mode stages files.
 """
 import argparse
 import os
@@ -32,10 +32,25 @@ def executable():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--staged", action="store_true", required=True)
-    parser.parse_args()
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--staged", action="store_true")
+    mode.add_argument("--fix", action="store_true")
+    parser.add_argument("filenames", nargs="*")
+    args = parser.parse_args()
     root = Path(git("rev-parse", "--show-toplevel").decode().strip())
     os.chdir(root)
+    if args.fix:
+        files = [name for name in args.filenames
+                 if name.startswith("Source/") and Path(name).suffix in (".h", ".cpp")]
+        if not files:
+            return 0
+        tool = executable()
+        version = subprocess.check_output([tool, "--version"]).decode("utf-8", errors="replace")
+        major = re.search(r"version (\d+)", version)
+        if not major or int(major.group(1)) < 22:
+            raise RuntimeError("clang-format 22+ is required by this project's style config.")
+        subprocess.run([tool, "--style=file:" + str(root / "Source/.clang-format"), "-i", *files], check=True)
+        return 0
     names = git("diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z").decode("utf-8").split("\0")
     files = [name for name in names if name.startswith("Source/") and Path(name).suffix in (".h", ".cpp")]
     if not files:

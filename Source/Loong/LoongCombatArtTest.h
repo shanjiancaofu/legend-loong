@@ -87,6 +87,7 @@ public:
     UPROPERTY(EditInstanceOnly, BlueprintReadWrite, Category = "ArtTest|Camera")
     TObjectPtr<AActor> FocusActor;
     static FVector ComputeCameraLocation(FVector Focus, float Pitch, float Yaw, float Distance);
+    static void SynchronizePawnMovementCamera(APawn* Pawn, FRotator ViewRotation);
     virtual void OnConstruction(const FTransform& Transform) override;
     virtual void Tick(float DeltaTime) override;
 

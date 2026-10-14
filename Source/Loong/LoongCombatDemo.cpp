@@ -519,7 +519,7 @@ void ALoongCombatDirector::RecalculateStats()
 
 void ALoongCombatDirector::EquipDragon(FLoongDragonAbility Ability)
 {
-    if (Ability.DragonId.IsNone() || !IsFighting())
+    if (Ability.DragonId.IsNone() || !IsFighting() || !IsValid(Player))
         return;
     RemoveDragon(Ability.DragonId);
     EquippedDragons.Add(Ability.DragonId, Ability);
@@ -664,6 +664,8 @@ void ALoongCombatDirector::FireEnemyProjectile(ALoongCombatEnemy* Enemy)
 float ALoongCombatDirector::GetElementDamageMultiplier() const
 {
     float M = 1;
+    if (!Definition)
+        return M;
     for (const auto& U : Definition->Upgrades)
         if (U.Effect == ELoongUpgradeEffect::ElementDamage)
             M += UpgradeLevels.FindRef(U.UpgradeId) * U.Magnitude;
@@ -673,15 +675,25 @@ float ALoongCombatDirector::GetElementDamageMultiplier() const
 void ALoongCombatDirector::ApplyDragonElements(ALoongCombatEnemy* Enemy, AActor* Source)
 {
     ++ElementHitAttempts;
-    if (!IsFighting() || !IsValid(Enemy) || !Enemy->Health->IsAlive())
+    if (!IsFighting() || !IsValid(Enemy) || !IsValid(Enemy->Health) || !Enemy->Health->IsAlive() ||
+        !IsValid(Enemy->Elements))
     {
         LastElementDiagnostic = TEXT("no valid surviving target / combat paused");
         return;
     }
     bool HasSkills = false;
     const bool Test = LoongElementDebug::TestMode();
+    const auto* Companion = Cast<ALoongCombatDragon>(Source);
+    if (Companion && (!Companions.Contains(Companion) || Companion->IsActorBeingDestroyed()))
+    {
+        LastElementDiagnostic = TEXT("companion no longer equipped");
+        return;
+    }
     for (const auto& Dragon : EquippedDragons)
     {
+        // Hero hits retain the existing passive loadout. Companion hits use their own modules only.
+        if (Companion && Companion->Definition.DragonId != Dragon.Key)
+            continue;
         TSet<FName> SeenSkills;
         for (const auto& Skill : Dragon.Value.ElementAbilities)
         {
@@ -726,7 +738,10 @@ void ALoongCombatDirector::ApplyDragonElements(ALoongCombatEnemy* Enemy, AActor*
     }
     if (!HasSkills)
         LastElementDiagnostic =
-            TEXT("no equipped element modules; check active Definition and Equip Element Test Presets");
+            Companion
+                ? FString::Printf(TEXT("companion %s: normal attack only (no element modules)"),
+                                  *Companion->Definition.DragonId.ToString())
+                : TEXT("no equipped element modules; check active Definition and Equip Element Test Presets");
 }
 
 void ALoongCombatDirector::FireProjectile(AActor* Source, ALoongCombatEnemy* Enemy, FLoongCombatStats Stats,
@@ -763,7 +778,8 @@ void ALoongCombatDirector::FireProjectile(AActor* Source, ALoongCombatEnemy* Ene
 
 float ALoongCombatDirector::ApplyHit(ALoongCombatEnemy* Enemy, AActor* Source, float Damage, bool bHero)
 {
-    if (!IsFighting() || !IsValid(Enemy) || !Enemy->Health->IsAlive())
+    if (!IsFighting() || !Definition || !IsValid(Enemy) || !IsValid(Enemy->Health) ||
+        !Enemy->Health->IsAlive())
         return 0;
     const bool ObservationTest = LoongElementDebug::TestMode();
     float Applied =
@@ -774,9 +790,13 @@ float ALoongCombatDirector::ApplyHit(ALoongCombatEnemy* Enemy, AActor* Source, f
     if (Definition->HitEffect)
         UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), Definition->HitEffect,
                                                        Enemy->GetActorLocation());
-    if (bHero && Enemy->Health->IsAlive())
+    if (Applied > 0 && Enemy->Health->IsAlive())
     {
-        ApplyDragonElements(Enemy, Source);
+        if (bHero || (IsValid(Source) && Source->IsA<ALoongCombatDragon>()))
+            ApplyDragonElements(Enemy, Source);
+    }
+    if (bHero && Applied > 0 && Enemy->Health->IsAlive() && IsFighting())
+    {
         float Multiplier = 1;
         for (const auto& U : Definition->Upgrades)
             if (U.Effect == ELoongUpgradeEffect::ElementDamage)
@@ -861,6 +881,9 @@ void ALoongCombatDirector::OfferUpgrades()
             });
     }
     State = UpgradeChoices.Num() > 0 ? ELoongCombatState::UpgradeSelection : ELoongCombatState::Fighting;
+    for (const auto& Enemy : Enemies)
+        if (IsValid(Enemy) && IsValid(Enemy->Elements))
+            Enemy->Elements->SetVisualsPaused(!IsFighting());
     if (auto* C = Cast<ACharacter>(Player))
     {
         C->GetCharacterMovement()->StopMovementImmediately();
@@ -885,6 +908,9 @@ bool ALoongCombatDirector::ChooseUpgrade(FName Id, int32 ExpectedGeneration)
     UpgradeChoices.Reset();
     RecalculateStats();
     State = ELoongCombatState::Fighting;
+    for (const auto& Enemy : Enemies)
+        if (IsValid(Enemy) && IsValid(Enemy->Elements))
+            Enemy->Elements->SetVisualsPaused(false);
     if (auto* C = Cast<ACharacter>(Player))
         C->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
     if (Experience >= ExperienceThreshold())
@@ -1074,7 +1100,8 @@ void ALoongCombatGameMode::Tick(float DeltaTime)
 FString ALoongCombatDirector::GetElementDebugSummary() const
 {
     FString Text = FString::Printf(
-        TEXT("ELEMENT DEBUG test=%d state=%d\nDefinition=%s presets=%d equipped=%d heroHits=%d applied=%d\n"),
+        TEXT(
+            "ELEMENT DEBUG test=%d state=%d\nDefinition=%s presets=%d equipped=%d elementHits=%d applied=%d\n"),
         LoongElementDebug::TestMode(), static_cast<int32>(State), *GetPathNameSafe(Definition),
         Definition ? Definition->bEquipElementTestPresets : false, EquippedDragons.Num(), ElementHitAttempts,
         ElementApplySuccesses);
@@ -1091,7 +1118,12 @@ FString ALoongCombatDirector::GetElementDebugSummary() const
             const FString* Reason = ElementSkillDiagnostics.Find(Key);
             Text += FString::Printf(TEXT("  %s chance=%.0f%% cooldown=%.2fs : %s\n"),
                                     *Skill.SkillId.ToString(), Skill.TriggerChance * 100.f, Remaining,
-                                    Reason ? **Reason : TEXT("no eligible hero hit yet"));
+                                    Reason ? **Reason : TEXT("no eligible hero/companion hit yet"));
+            Text += FString::Printf(TEXT("    visual=%s fallback=%d\n"),
+                                    Skill.Effect.VisualEffect.IsNull()
+                                        ? TEXT("None")
+                                        : *Skill.Effect.VisualEffect.ToSoftObjectPath().ToString(),
+                                    Skill.Effect.bUseFallbackVisual);
         }
     }
     Text += LastElementDiagnostic;
@@ -1108,24 +1140,30 @@ void ALoongCombatDirector::UpdateElementDebug(float DeltaTime)
         return;
     const float Interval = LoongElementDebug::DrawInterval();
     ElementDebugCountdown = Interval;
+    // Detailed configuration lives in the scrollable test panel, not over the combat HUD.
     if (GEngine)
-        GEngine->AddOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()), Interval + 0.1f, FColor::Yellow,
-                                         GetElementDebugSummary());
+        GEngine->RemoveOnScreenDebugMessage(static_cast<uint64>(GetUniqueID()));
     int32 Drawn = 0;
-    for (int32 Pass = 0; Pass < 2; ++Pass)
-    {
-        for (const auto& Enemy : Enemies)
+    auto Targets = Enemies;
+    const FVector Focus = IsValid(Player) ? Player->GetActorLocation() : GetActorLocation();
+    Targets.RemoveAll(
+        [](const auto& Enemy)
         {
-            if (!IsValid(Enemy) || !Enemy->Health->IsAlive())
-                continue;
-            const bool HasEffects = Enemy->Elements->GetEffectCount() > 0;
-            if (HasEffects != (Pass == 0))
-                continue;
-            if (Drawn >= LoongElementDebug::MaxTargets())
-                break;
-            ++Drawn;
-            Enemy->Elements->DrawDebugState(Interval + 0.05f);
-        }
+            return !IsValid(Enemy) || !IsValid(Enemy->Health) || !Enemy->Health->IsAlive() ||
+                   !IsValid(Enemy->Elements) || Enemy->Elements->GetEffectCount() == 0;
+        });
+    Targets.Sort(
+        [Focus](const ALoongCombatEnemy& A, const ALoongCombatEnemy& B)
+        {
+            return FVector::DistSquared2D(A.GetActorLocation(), Focus) <
+                   FVector::DistSquared2D(B.GetActorLocation(), Focus);
+        });
+    for (const auto& Enemy : Targets)
+    {
+        if (Drawn >= LoongElementDebug::MaxTargets())
+            break;
+        ++Drawn;
+        Enemy->Elements->DrawDebugState(Interval + 0.05f);
     }
 #endif
 }

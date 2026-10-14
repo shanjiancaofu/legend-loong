@@ -2,24 +2,154 @@
 #include "LoongCombatDemo.h"
 #include "NiagaraComponent.h"
 #include "NiagaraFunctionLibrary.h"
+#include "NiagaraSystem.h"
 #include "Components/SceneComponent.h"
 #include "LoongElementDebug.h"
 #include "DrawDebugHelpers.h"
+#include "Components/InstancedStaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "UObject/ConstructorHelpers.h"
+#include "GameFramework/PlayerController.h"
+#include "GameFramework/HUD.h"
 
 bool FLoongElementEffect::IsValid() const
 {
-    return !EffectId.IsNone() && FMath::IsFinite(Duration) && Duration > 0 && FMath::IsFinite(TickInterval) &&
+    return (Element == ELoongElementKind::Fire || Element == ELoongElementKind::Ice ||
+            Element == ELoongElementKind::Wind) &&
+           !EffectId.IsNone() && FMath::IsFinite(Duration) && Duration > 0 && FMath::IsFinite(TickInterval) &&
            TickInterval >= 0.05f && MaxStacks >= 1 && MaxStacks <= 20 &&
            FMath::IsFinite(ApplicationCooldown) && ApplicationCooldown >= 0 &&
            FMath::IsFinite(DamagePerTick) && DamagePerTick >= 0 && FMath::IsFinite(SlowPerStack) &&
            SlowPerStack >= 0 && SlowPerStack <= 0.9f && FreezeAtStacks >= 1 &&
            FMath::IsFinite(FreezeDuration) && FreezeDuration >= 0 && FMath::IsFinite(Radius) && Radius >= 0 &&
-           FMath::IsFinite(DisplacementPerTick);
+           FMath::IsFinite(DisplacementPerTick) && !VisualOffset.ContainsNaN() &&
+           !VisualScale.ContainsNaN() && VisualScale.X > 0 && VisualScale.Y > 0 && VisualScale.Z > 0;
 }
 
 ULoongElementComponent::ULoongElementComponent()
 {
     PrimaryComponentTick.bCanEverTick = false;
+    static ConstructorHelpers::FObjectFinder<UStaticMesh> Sphere(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+    static ConstructorHelpers::FObjectFinder<UStaticMesh> Cone(TEXT("/Engine/BasicShapes/Cone.Cone"));
+    static ConstructorHelpers::FObjectFinder<UMaterialInterface> Material(
+        TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+    FallbackSphere = Sphere.Object;
+    FallbackCone = Cone.Object;
+    FallbackMaterial = Material.Object;
+}
+
+void ULoongElementComponent::CreateVisual(FLoongActiveElement& E)
+{
+    auto* Owner = GetOwner();
+    auto* Root = IsValid(Owner) ? Owner->GetRootComponent() : nullptr;
+    if (!IsValid(Root))
+    {
+        E.VisualDiagnostic = TEXT("no target root component");
+        return;
+    }
+    if (!E.Spec.VisualEffect.IsNull())
+    {
+        if (auto* System = E.Spec.VisualEffect.LoadSynchronous())
+        {
+            // Set user parameters before activation; do not inherit scaled mesh roots.
+            E.Visual = UNiagaraFunctionLibrary::SpawnSystemAttached(
+                System, Root, NAME_None, E.Spec.VisualOffset, FRotator::ZeroRotator,
+                EAttachLocation::KeepRelativeOffset, false, false, ENCPoolMethod::None, false);
+            if (IsValid(E.Visual))
+            {
+                E.Visual->SetAbsolute(false, false, true);
+                E.Visual->SetWorldScale3D(E.Spec.VisualScale);
+                UpdateVisual(E);
+                E.Visual->Activate(true);
+                E.VisualDiagnostic = TEXT("Niagara: ") + System->GetPathName();
+                return;
+            }
+        }
+        E.VisualDiagnostic = TEXT("Niagara load/spawn failed; ");
+    }
+    if (!E.Spec.bUseFallbackVisual || !FallbackMaterial)
+    {
+        E.VisualDiagnostic += TEXT("fallback disabled/unavailable");
+        return;
+    }
+    auto* Shape = E.Spec.Element == ELoongElementKind::Ice ? FallbackCone.Get() : FallbackSphere.Get();
+    if (!Shape)
+    {
+        E.VisualDiagnostic += TEXT("fallback mesh unavailable");
+        return;
+    }
+    E.FallbackVisual = NewObject<UInstancedStaticMeshComponent>(Owner);
+    Owner->AddInstanceComponent(E.FallbackVisual);
+    E.FallbackVisual->SetupAttachment(Root);
+    E.FallbackVisual->SetMobility(EComponentMobility::Movable);
+    E.FallbackVisual->SetAbsolute(false, false, true);
+    E.FallbackVisual->SetRelativeLocation(E.Spec.VisualOffset);
+    E.FallbackVisual->SetWorldScale3D(E.Spec.VisualScale);
+    E.FallbackVisual->SetStaticMesh(Shape);
+    E.FallbackVisual->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+    E.FallbackVisual->SetGenerateOverlapEvents(false);
+    E.FallbackVisual->SetCanEverAffectNavigation(false);
+    E.FallbackVisual->SetCastShadow(false);
+    auto* Tint = UMaterialInstanceDynamic::Create(FallbackMaterial, E.FallbackVisual);
+    const FLinearColor Color = E.Spec.Element == ELoongElementKind::Fire  ? FLinearColor(1.f, 0.12f, 0.01f)
+                               : E.Spec.Element == ELoongElementKind::Ice ? FLinearColor(0.05f, 0.65f, 1.f)
+                                                                          : FLinearColor(0.15f, 1.f, 0.3f);
+    Tint->SetVectorParameterValue(TEXT("Color"), Color);
+    E.FallbackVisual->SetMaterial(0, Tint);
+    E.FallbackVisual->RegisterComponent();
+    for (int32 i = 0; i < 4; ++i)
+        E.FallbackVisual->AddInstance(FTransform::Identity);
+    UpdateVisual(E);
+    E.VisualDiagnostic += TEXT("fallback: prototype mesh");
+}
+
+void ULoongElementComponent::UpdateVisual(FLoongActiveElement& E)
+{
+    if (IsValid(E.Visual))
+    {
+        E.Visual->SetVariableFloat(TEXT("User.Duration"), E.Remaining);
+        E.Visual->SetVariableFloat(TEXT("User.Radius"), E.Spec.Radius);
+        E.Visual->SetVariableInt(TEXT("User.Stacks"), E.Stacks);
+        E.Visual->SetVariableBool(TEXT("User.Frozen"), E.FrozenRemaining > 0);
+    }
+    if (!IsValid(E.FallbackVisual))
+        return;
+    for (int32 i = 0; i < E.FallbackVisual->GetInstanceCount(); ++i)
+    {
+        const float Angle =
+            i * PI * 0.5f + (E.Spec.Element == ELoongElementKind::Ice ? 0.f : E.VisualTime * 3.f);
+        float Radius = 45.f;
+        float Height = 0.f;
+        FVector Scale(0.18f);
+        if (E.Spec.Element == ELoongElementKind::Fire)
+        {
+            Height = 15.f + FMath::Fmod(E.VisualTime * 65.f + i * 22.f, 85.f);
+            Scale = FVector(0.18f, 0.18f, 0.35f + E.Stacks * 0.08f);
+        }
+        else if (E.Spec.Element == ELoongElementKind::Ice)
+        {
+            Scale = E.FrozenRemaining > 0 ? FVector(0.42f, 0.42f, 1.2f) : FVector(0.25f, 0.25f, 0.55f);
+        }
+        else
+        {
+            // Sparse orbit markers reveal the damage radius without covering enemy projectiles.
+            Radius = E.Spec.Radius;
+            Height = -65.f;
+            Scale = FVector(0.35f, 0.15f, 0.15f);
+        }
+        const FVector Position(FMath::Cos(Angle) * Radius, FMath::Sin(Angle) * Radius, Height);
+        E.FallbackVisual->UpdateInstanceTransform(
+            i, FTransform(FRotator(0, FMath::RadiansToDegrees(Angle), 0), Position, Scale), false,
+            i == E.FallbackVisual->GetInstanceCount() - 1, true);
+    }
+}
+
+void ULoongElementComponent::SetVisualsPaused(bool bPaused)
+{
+    for (const auto& E : Active)
+        if (IsValid(E.Visual))
+            E.Visual->SetPaused(bPaused);
 }
 
 bool ULoongElementComponent::ApplyEffect(FLoongElementEffect Spec, FName SourceId, AActor* Instigator,
@@ -78,11 +208,7 @@ bool ULoongElementComponent::ApplyEffect(FLoongElementEffect Spec, FName SourceI
         E.SourcePosition = SourcePosition;
         E.Remaining = Spec.Duration;
         E.UntilTick = Spec.TickInterval;
-        if (!Spec.VisualEffect.IsNull())
-            if (auto* V = Spec.VisualEffect.LoadSynchronous())
-                E.Visual = UNiagaraFunctionLibrary::SpawnSystemAttached(
-                    V, GetOwner()->GetRootComponent(), NAME_None, FVector::ZeroVector, FRotator::ZeroRotator,
-                    EAttachLocation::KeepRelativeOffset, false);
+        CreateVisual(E);
         Active.Add(E);
         Entry = &Active.Last();
     }
@@ -95,12 +221,7 @@ bool ULoongElementComponent::ApplyEffect(FLoongElementEffect Spec, FName SourceI
             Entry->FreezeProgress = 0;
         }
     }
-    if (IsValid(Entry->Visual))
-    {
-        Entry->Visual->SetVariableFloat(TEXT("User.Duration"), Entry->Remaining);
-        Entry->Visual->SetVariableFloat(TEXT("User.Radius"), Entry->Spec.Radius);
-        Entry->Visual->SetVariableInt(TEXT("User.Stacks"), Entry->Stacks);
-    }
+    UpdateVisual(*Entry);
     ++SuccessfulApplications;
     LastApplyDiagnostic =
         FString::Printf(TEXT("applied %s from %s"), *Spec.EffectId.ToString(), *SourceId.ToString());
@@ -113,6 +234,8 @@ void ULoongElementComponent::RemoveAt(int32 Index)
     FName Id = Active[Index].Spec.EffectId;
     if (IsValid(Active[Index].Visual))
         Active[Index].Visual->DestroyComponent();
+    if (IsValid(Active[Index].FallbackVisual))
+        Active[Index].FallbackVisual->DestroyComponent();
     Active.RemoveAt(Index);
     OnElementChanged.Broadcast(Id, 0);
 }
@@ -194,7 +317,7 @@ void ULoongElementComponent::ApplyPeriodic(const FLoongActiveElement& E)
     {
         if (!Director->IsFighting())
             break;
-        if (IsValid(T) && T->Health->IsAlive() &&
+        if (IsValid(T) && !T->IsActorBeingDestroyed() && IsValid(T->Health) && T->Health->IsAlive() &&
             FVector::DistSquared2D(Center, T->GetActorLocation()) <= FMath::Square(E.Spec.Radius))
         {
             ++LastWindHits;
@@ -204,7 +327,10 @@ void ULoongElementComponent::ApplyPeriodic(const FLoongActiveElement& E)
             {
                 FVector Away = T->GetActorLocation() - E.SourcePosition;
                 Away.Z = 0;
-                FVector P = T->GetActorLocation() + Away.GetSafeNormal() * E.Spec.DisplacementPerTick;
+                const float Displacement = E.Spec.DisplacementPerTick < 0
+                                               ? -FMath::Min(-E.Spec.DisplacementPerTick, Away.Size2D())
+                                               : E.Spec.DisplacementPerTick;
+                FVector P = T->GetActorLocation() + Away.GetSafeNormal() * Displacement;
                 if (Director->Definition)
                 {
                     const auto O = Director->GetActorLocation();
@@ -248,6 +374,8 @@ void ULoongElementComponent::AdvanceCombatTime(float DeltaSeconds)
         E.Remaining -= Step;
         E.SinceApplication += DeltaSeconds;
         E.FrozenRemaining = FMath::Max(0.f, E.FrozenRemaining - DeltaSeconds);
+        E.VisualTime += Step;
+        UpdateVisual(E);
         E.UntilTick -= Step;
         const int32 Ticks = FMath::Min(
             64,
@@ -310,6 +438,7 @@ FString ULoongElementComponent::BuildDebugText() const
                                 E.Spec.DamagePerTick * E.Stacks);
         Text += FString::Printf(TEXT("  actual last tick=%.1f ticks=%d area hits=%d moved=%.1fcm\n"),
                                 E.LastTickDamage, E.PeriodicTicks, E.LastTickHits, E.LastTickDisplacement);
+        Text += TEXT("  visual=") + E.VisualDiagnostic + TEXT("\n");
     }
     if (Active.IsEmpty())
         Text = TEXT("NO ACTIVE ELEMENT\n");
@@ -326,15 +455,19 @@ FString ULoongElementComponent::BuildDebugText() const
 void ULoongElementComponent::DrawDebugState(float Lifetime) const
 {
 #if !UE_BUILD_SHIPPING
-    if (!LoongElementDebug::Enabled() || !GetOwner())
+    if (!LoongElementDebug::Enabled() || !GetOwner() || Active.IsEmpty())
         return;
     const FVector Position = GetOwner()->GetActorLocation();
-    FColor Color = Active.IsEmpty() ? FColor::Silver : FColor::Yellow;
+    FColor Color = IsFrozen() ? FColor::Cyan : FColor::White;
+    FString Label;
     for (const auto& E : Active)
     {
-        Color = E.Spec.Element == ELoongElementKind::Fire  ? FColor::Orange
-                : E.Spec.Element == ELoongElementKind::Ice ? FColor::Cyan
-                                                           : FColor::Green;
+        if (!Label.IsEmpty())
+            Label += TEXT(" | ");
+        const TCHAR* Kind = E.Spec.Element == ELoongElementKind::Fire  ? TEXT("FIRE")
+                            : E.Spec.Element == ELoongElementKind::Ice ? TEXT("ICE")
+                                                                       : TEXT("WIND");
+        Label += FString::Printf(TEXT("%s x%d"), Kind, E.Stacks);
         if (E.Spec.Element == ELoongElementKind::Wind)
             DrawDebugCircle(GetWorld(), Position - FVector(0, 0, 40), E.Spec.Radius, 32, Color, false,
                             Lifetime, 0, 2.f, FVector::ForwardVector, FVector::RightVector, false);
@@ -344,7 +477,13 @@ void ULoongElementComponent::DrawDebugState(float Lifetime) const
         DrawDebugLine(GetWorld(), Move.Key, Move.Value, FColor::Green, false, Lifetime, 0, 2.f);
         DrawDebugPoint(GetWorld(), Move.Value, 12.f, FColor::Green, false, Lifetime);
     }
-    DrawDebugString(GetWorld(), Position + FVector(0, 0, 100), BuildDebugText(), nullptr, Color, Lifetime,
-                    false, 0.8f);
+    Label += FString::Printf(TEXT("\nslow %.0f%%  frozen %d"), (1.f - GetMovementMultiplier()) * 100.f,
+                             IsFrozen());
+    // DrawDebugString appends entries even for the same actor. Replace one attached label instead.
+    for (auto It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+        if (auto* PC = It->Get())
+            if (auto* HUD = PC->GetHUD())
+                HUD->AddDebugText(Label, GetOwner(), Lifetime, FVector(0, 0, 110), FVector(0, 0, 110), Color,
+                                  false, false, true, nullptr, 0.85f, true);
 #endif
 }

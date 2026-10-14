@@ -8,6 +8,7 @@ class ALoongCombatDirector;
 class UTextBlock;
 class UVerticalBox;
 class ULoongBuildingMenuButton;
+class USizeBox;
 UCLASS()
 class LOONG_API ULoongCombatWidget : public UUserWidget
 {
@@ -54,6 +55,10 @@ private:
     TObjectPtr<UTextBlock> DebugButtonText;
     UPROPERTY()
     TObjectPtr<UTextBlock> TestButtonText;
+    UPROPERTY()
+    TObjectPtr<USizeBox> ElementPanelSize;
+    UPROPERTY()
+    TObjectPtr<USizeBox> ElementStatusSize;
     bool bElementPanelOpen = false;
     bool bOwnedElementSettings = false;
     bool bInitialElementDebug = false;

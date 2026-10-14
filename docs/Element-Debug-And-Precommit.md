@@ -2,12 +2,20 @@
 
 ## pre-commit
 
-本地 core.hooksPath 已设置 .githooks；跨电脑克隆后运行 git config core.hooksPath .githooks。
-版本化文件：.githooks/pre-commit、Tools/check_cpp_format.py、Source/.clang-format。
-只读检查暂存区Source下.h/.cpp，不自动改文件、不自动暂存。部分暂存时读git show :path，忽略工作区尚未暂存内容。
-只提交资产时不运行C++格式检查。需要Python和clang-format22+；设置CLANG_FORMAT可覆盖工具路径。
-第一次提交须把Source/.clang-format同时加入暂存区。当前暂存区仍是格式化前的内容，提交前要审查后重新git add相应源码；不能因为工作区已格式化就认为暂存区也已更新。
-独立临时仓库测试通过：格式正确放行、部分暂存不误读工作区、格式错误阻止、不修改index或工作文件。本仓库未提交/未改暂存区。
+现使用标准 pre-commit 框架，配置为根目录 `.pre-commit-config.yaml`。
+本地 core.hooksPath 保持 .githooks，该入口调用 pre-commit；跨电脑克隆后执行：
+
+```powershell
+python -m pip install pre-commit
+git config core.hooksPath .githooks
+pre-commit run --all-files
+```
+
+简写：`pre-commit run -a`（小写 a）。`git commit` 自动检查暂存文件；框架处理未暂存改动的暂存与恢复。
+本地 clang-format hook 使用 Source/.clang-format 自动修正 Source 下 .h/.cpp 的格式，不自动 git add。
+首次运行若修正文件，检查差异、重新 git add，再运行 pre-commit；没有差异时显示 Passed。
+只提交资产时跳过 C++ hook。需要 clang-format22+；设置 CLANG_FORMAT 可覆盖工具路径。
+`python Tools/check_cpp_format.py --staged` 保留为旧只读检查接口，正常工作使用上述标准命令。
 
 ## 调试开关
 

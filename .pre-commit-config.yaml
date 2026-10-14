@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: clang-format
+        name: clang-format (Loong C++)
+        entry: python Tools/check_cpp_format.py --fix
+        language: system
+        files: ^Source/.*\.(h|cpp)$
+        require_serial: true

@@ -9,6 +9,7 @@
 #include "Components/SizeBox.h"
 #include "Components/Border.h"
 #include "Components/ScrollBox.h"
+#include "Components/ButtonSlot.h"
 #include "LoongElementDebug.h"
 
 void ULoongCombatWidget::Setup(ALoongCombatDirector* InDirector)
@@ -50,6 +51,10 @@ void ULoongCombatWidget::NativeTick(const FGeometry& Geometry, float DeltaTime)
         FMath::Max(0.f, Director->Definition->DurationSeconds - Director->Elapsed), Director->Kills)));
     if (Director->State == ELoongCombatState::Results && bOwnedElementSettings)
         RestoreElementTestSettings();
+    if (ElementPanelSize)
+        ElementPanelSize->SetWidthOverride(FMath::Clamp(Geometry.GetLocalSize().X * 0.34f, 260.f, 400.f));
+    if (ElementStatusSize)
+        ElementStatusSize->SetHeightOverride(FMath::Clamp(Geometry.GetLocalSize().Y - 210.f, 100.f, 260.f));
     ElementRefreshTime -= DeltaTime;
     if (ElementRefreshTime <= 0.f)
     {
@@ -134,7 +139,8 @@ void ULoongCombatWidget::BuildElementTestPanel(UCanvasPanel* Root)
 {
 #if !UE_BUILD_SHIPPING
     auto* Size = WidgetTree->ConstructWidget<USizeBox>();
-    Size->SetWidthOverride(360.f);
+    ElementPanelSize = Size;
+    Size->SetWidthOverride(400.f);
     auto* Background = WidgetTree->ConstructWidget<UBorder>();
     Background->SetPadding(FMargin(10));
     Background->SetBrushColor(FLinearColor(0.03f, 0.04f, 0.05f, 0.95f));
@@ -151,7 +157,13 @@ void ULoongCombatWidget::BuildElementTestPanel(UCanvasPanel* Root)
         auto* Button = WidgetTree->ConstructWidget<ULoongBuildingMenuButton>();
         Text = WidgetTree->ConstructWidget<UTextBlock>();
         Text->SetText(FText::FromString(Label));
+        auto Font = Text->GetFont();
+        Font.Size = 14;
+        Text->SetFont(Font);
+        Text->SetAutoWrapText(true);
         Button->SetContent(Text);
+        if (auto* Slot = Cast<UButtonSlot>(Text->Slot))
+            Slot->SetPadding(FMargin(6.f, 4.f));
         Parent->AddChildToVerticalBox(Button);
         return Button;
     };
@@ -161,9 +173,11 @@ void ULoongCombatWidget::BuildElementTestPanel(UCanvasPanel* Root)
     ElementPanel = WidgetTree->ConstructWidget<UVerticalBox>();
     Container->AddChildToVerticalBox(ElementPanel);
     auto* Notice = WidgetTree->ConstructWidget<UTextBlock>();
+    auto NoticeFont = Notice->GetFont();
+    NoticeFont.Size = 12;
+    Notice->SetFont(NoticeFont);
     Notice->SetAutoWrapText(true);
-    Notice->SetText(
-        FText::FromString(TEXT("仅验收使用。默认关闭，不改资产参数；结束测试后请恢复正常战斗。")));
+    Notice->SetText(FText::FromString(TEXT("高触发模式用于观察，结束后请恢复正常战斗。")));
     ElementPanel->AddChildToVerticalBox(Notice);
     UTextBlock* DebugText = nullptr;
     AddButton(ElementPanel, TEXT("开启状态可视化"), DebugText)
@@ -177,6 +191,7 @@ void ULoongCombatWidget::BuildElementTestPanel(UCanvasPanel* Root)
     AddButton(ElementPanel, TEXT("结束测试：恢复正常"), StopText)
         ->OnClicked.AddDynamic(this, &ULoongCombatWidget::StopElementTest);
     auto* StatusBox = WidgetTree->ConstructWidget<USizeBox>();
+    ElementStatusSize = StatusBox;
     StatusBox->SetHeightOverride(260.f);
     auto* Scroll = WidgetTree->ConstructWidget<UScrollBox>();
     ElementStatus = WidgetTree->ConstructWidget<UTextBlock>();
@@ -255,9 +270,22 @@ void ULoongCombatWidget::RefreshElementTestPanel()
                                                       : TEXT("高触发测试：已关闭（点击开启）")));
     if (ElementStatus && bElementPanelOpen && Director.IsValid())
     {
-        ElementStatus->SetText(
-            FText::FromString(TEXT("橙色 FIRE：燃烧\n青色 ICE：减速 / 冻结\n绿色 WIND：范围 / 位移\n\n") +
-                              Director->GetElementDebugSummary()));
+        ALoongCombatEnemy* Observed = nullptr;
+        const FVector Focus =
+            IsValid(Director->Player) ? Director->Player->GetActorLocation() : Director->GetActorLocation();
+        for (const auto& Enemy : Director->Enemies)
+            if (IsValid(Enemy) && IsValid(Enemy->Health) && Enemy->Health->IsAlive() &&
+                IsValid(Enemy->Elements) && Enemy->Elements->GetEffectCount() > 0 &&
+                (!Observed || FVector::DistSquared2D(Enemy->GetActorLocation(), Focus) <
+                                  FVector::DistSquared2D(Observed->GetActorLocation(), Focus)))
+                Observed = Enemy;
+        const FString TargetDetails =
+            Observed ? FString::Printf(TEXT("\n\n当前观察目标：%s\n%s"), *Observed->GetName(),
+                                       *Observed->Elements->BuildDebugText())
+                     : TEXT("\n\n附近暂无生效的元素目标。");
+        ElementStatus->SetText(FText::FromString(TEXT("火：橙红　冰：青色　风：绿色") + TargetDetails +
+                                                 TEXT("\n\n配置摘要：\n") +
+                                                 Director->GetElementDebugSummary()));
     }
 }
 
