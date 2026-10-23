@@ -14,6 +14,8 @@ class USkeletalMeshComponent;
 class UCharacterMovementComponent;
 class ALoongCombatDirector;
 class ALoongCombatEnemy;
+class ALoongMountPawn;
+class APlayerController;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FLoongCombatDeath);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FLoongCombatDamaged, float, Damage, AActor*, Source);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FLoongCombatSettled, FLoongCombatResult, Result);
@@ -63,6 +65,10 @@ public:
     TWeakObjectPtr<ALoongCombatDirector> Director;
     bool bHeroAttack = false;
     float Cooldown = 0;
+    bool bAutomatic = true;
+    bool bAttackRequested = false;
+    bool bUseAimPoint = false;
+    FVector AimPoint = FVector::ZeroVector;
     virtual void TickComponent(float DeltaTime, ELevelTick TickType,
                                FActorComponentTickFunction* Fn) override;
     ALoongCombatEnemy* FindTarget() const;
@@ -216,6 +222,29 @@ public:
 
     UFUNCTION(BlueprintCallable)
     void RemoveDragon(FName Id);
+    UFUNCTION(BlueprintCallable)
+    bool SelectCompanion(FName Id);
+    UFUNCTION(BlueprintCallable)
+    bool UnequipCompanions();
+    UFUNCTION(BlueprintCallable)
+    bool RecallCompanion();
+    UFUNCTION(BlueprintCallable)
+    bool ToggleMount();
+    UFUNCTION(BlueprintCallable)
+    bool Dismount(bool bForce = false);
+    UFUNCTION(BlueprintCallable)
+    bool CommandCompanionSkill(int32 Slot);
+    UFUNCTION(BlueprintPure)
+    bool IsMounted() const;
+    ALoongCombatDragon* GetSelectedCompanion() const;
+    AActor* GetCombatAvatar() const;
+    FString GetCompanionStatus() const;
+    UPROPERTY(BlueprintReadOnly)
+    TObjectPtr<ALoongMountPawn> MountPawn;
+    UPROPERTY(BlueprintReadOnly)
+    FString CompanionFeedback;
+    void MountedBasicAttack();
+    void MountPawnEnded(ALoongMountPawn* Pawn);
     bool IsActiveCompanion(const ALoongCombatDragon* Dragon) const;
     void UnregisterCompanion(ALoongCombatDragon* Dragon);
 
@@ -287,6 +316,21 @@ private:
     void OfferUpgrades();
     void CleanupActors();
     void CancelCompanionProjectiles(ALoongCombatDragon* Dragon);
+    TWeakObjectPtr<ALoongCombatDragon> SelectedCompanion;
+    FName LastCompanionPreset = NAME_None;
+    TWeakObjectPtr<APlayerController> RiderController;
+    bool bRestoringRider = false;
+    bool bRiderCollision = true;
+    bool bRiderTick = true;
+    uint8 RiderMovementMode = 0;
+    uint8 RiderCustomMovementMode = 0;
+    FVector RiderScale = FVector::OneVector;
+    void InstallCompanionInput(APlayerController* PC);
+    void MountKeyPressed();
+    void SkillOnePressed();
+    void SkillTwoPressed();
+    void SkillThreePressed();
+    void RestoreRider();
 };
 UCLASS()
 class LOONG_API ALoongCombatGameMode : public ALoongCombatArtTestGameMode

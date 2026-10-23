@@ -92,6 +92,8 @@ public:
     virtual void Tick(float DeltaTime) override;
 
 private:
+    FVector SmoothedFocus = FVector::ZeroVector;
+    bool bHasSmoothedFocus = false;
     void ApplyCamera(FVector Focus);
     TWeakObjectPtr<APlayerController> LocalController;
 };

@@ -1,5 +1,6 @@
 #include "LoongCombatDemo.h"
 #include "LoongCombatWidget.h"
+#include "LoongMountPawn.h"
 #include "LoongElementDebug.h"
 #include "Engine/Engine.h"
 #include "LoongBuildingSystemComponent.h"
@@ -144,12 +145,16 @@ ALoongCombatEnemy* ULoongAutoAttackComponent::FindTarget() const
         if (!Director->IsActiveCompanion(Dragon))
             return nullptr;
     ALoongCombatEnemy* Best = nullptr;
-    float BestSquared = FMath::Square(Stats.AttackRange);
+    float BestSquared = bUseAimPoint ? TNumericLimits<float>::Max() : FMath::Square(Stats.AttackRange);
     for (auto& Enemy : Director->Enemies)
         if (IsValid(Enemy) && !Enemy->IsActorBeingDestroyed() && IsValid(Enemy->Health) &&
             Enemy->Health->IsAlive())
         {
-            float Distance = FVector::DistSquared(GetOwner()->GetActorLocation(), Enemy->GetActorLocation());
+            if (FVector::DistSquared(GetOwner()->GetActorLocation(), Enemy->GetActorLocation()) >
+                FMath::Square(Stats.AttackRange))
+                continue;
+            float Distance = FVector::DistSquared(bUseAimPoint ? AimPoint : GetOwner()->GetActorLocation(),
+                                                  Enemy->GetActorLocation());
             if (Distance < BestSquared)
             {
                 BestSquared = Distance;
@@ -163,6 +168,8 @@ void ULoongAutoAttackComponent::TickComponent(float DeltaTime, ELevelTick TickTy
                                               FActorComponentTickFunction* Fn)
 {
     Super::TickComponent(DeltaTime, TickType, Fn);
+    if (bHeroAttack && Director.IsValid() && Director->IsMounted())
+        return;
     if (!FMath::IsFinite(DeltaTime) || DeltaTime <= 0 || !IsValid(GetOwner()) ||
         GetOwner()->IsActorBeingDestroyed() || !Director.IsValid() || Director->IsActorBeingDestroyed() ||
         !Director->IsFighting() || !IsValid(Director->Player) || Director->Player->IsActorBeingDestroyed() ||
@@ -172,7 +179,13 @@ void ULoongAutoAttackComponent::TickComponent(float DeltaTime, ELevelTick TickTy
         return;
     Cooldown -= DeltaTime;
     if (Cooldown > 0)
+    {
+        bAttackRequested = false;
         return;
+    }
+    if (!bAutomatic && !bAttackRequested)
+        return;
+    bAttackRequested = false;
     auto* Enemy = FindTarget();
     if (!Enemy)
     {
@@ -253,7 +266,7 @@ void ALoongCombatEnemy::Tick(float DeltaTime)
         return;
     if (Elements->IsFrozen())
         return;
-    FVector Delta = Director->Player->GetActorLocation() - GetActorLocation();
+    FVector Delta = Director->GetCombatAvatar()->GetActorLocation() - GetActorLocation();
     Delta.Z = 0;
     float Distance = Delta.Size();
     float Speed = FMath::Max(0.f, Definition.MoveSpeed) * Elements->GetMovementMultiplier();
@@ -346,7 +359,7 @@ void ALoongCombatProjectile::Tick(float DeltaTime)
             return;
         }
         const FVector Start = GetActorLocation(), End = Start + FlightDirection * Speed * DeltaTime;
-        const FVector TargetPoint = Director->Player->GetActorLocation();
+        const FVector TargetPoint = Director->GetCombatAvatar()->GetActorLocation();
         if (FMath::PointDistToSegment(TargetPoint, Start, End) <= 55)
         {
             ResolveHit();
@@ -455,7 +468,9 @@ void ALoongCombatDragon::Tick(float DeltaTime)
         !IsValid(Director->Player) || Director->Player->IsActorBeingDestroyed() ||
         !IsValid(Director->PlayerHealth) || !Director->PlayerHealth->IsAlive())
         return;
-    const FVector Destination = Director->Player->GetActorLocation() + Definition.FollowOffset;
+    if (Director->IsMounted() && Director->GetSelectedCompanion() == this)
+        return;
+    const FVector Destination = Director->GetCombatAvatar()->GetActorLocation() + Definition.FollowOffset;
     if (Destination.ContainsNaN())
         return;
     const FVector Current = GetActorLocation();
@@ -540,6 +555,7 @@ bool ALoongCombatDirector::StartCombat(APawn* InPlayer)
         SpawnEnemyAt(GetActorLocation() + FVector(FMath::Cos(A) * 900, FMath::Sin(A) * 900, 100));
     }
     auto* PC = Cast<APlayerController>(Player->GetController());
+    InstallCompanionInput(PC);
     if (PC && PC->GetLocalPlayer())
     {
         PC->bShowMouseCursor = true;
@@ -590,6 +606,9 @@ void ALoongCombatDirector::EquipDragon(FLoongDragonAbility Ability)
         Ability.FollowOffset = FLoongDragonAbility().FollowOffset;
     if (!FMath::IsFinite(Ability.FollowRecoveryDistance) || Ability.FollowRecoveryDistance < 100.f)
         Ability.FollowRecoveryDistance = 2000.f;
+    if (IsMounted() && GetSelectedCompanion() &&
+        GetSelectedCompanion()->Definition.DragonId == Ability.DragonId && !Dismount())
+        return;
     RemoveDragon(Ability.DragonId);
     EquippedDragons.Add(Ability.DragonId, Ability);
     RecalculateStats();
@@ -602,12 +621,20 @@ void ALoongCombatDirector::EquipDragon(FLoongDragonAbility Ability)
             Dragon->Director = this;
             Dragon->Configure(Ability);
             Companions.Add(Dragon);
+            if (!GetSelectedCompanion() || (GetSelectedCompanion()->Definition.ElementAbilities.IsEmpty() &&
+                                            !Ability.ElementAbilities.IsEmpty()))
+                SelectedCompanion = Dragon;
         }
     }
 }
 
 void ALoongCombatDirector::RemoveDragon(FName Id)
 {
+    if (GetSelectedCompanion() && GetSelectedCompanion()->Definition.DragonId == Id)
+    {
+        Dismount(true);
+        SelectedCompanion.Reset();
+    }
     EquippedDragons.Remove(Id);
     ElementTriggerReadyAt.Remove(Id);
     // Unregister before destroying: EndPlay/Destroyed must not re-enter the removal iteration.
@@ -651,6 +678,11 @@ void ALoongCombatDirector::UnregisterCompanion(ALoongCombatDragon* Dragon)
 {
     if (!Dragon || Companions.Remove(Dragon) == 0)
         return;
+    if (SelectedCompanion.Get() == Dragon)
+    {
+        Dismount(true);
+        SelectedCompanion.Reset();
+    }
     RemoveDragon(Dragon->Definition.DragonId);
     CancelCompanionProjectiles(Dragon);
 }
@@ -752,7 +784,8 @@ void ALoongCombatDirector::FireEnemyProjectile(ALoongCombatEnemy* Enemy)
     Shot->bEnemyProjectile = true;
     Shot->Damage = Enemy->Definition.ContactDamage;
     Shot->Speed = FMath::Max(1.f, Enemy->Definition.ProjectileSpeed);
-    Shot->FlightDirection = (Player->GetActorLocation() - Shot->GetActorLocation()).GetSafeNormal();
+    Shot->FlightDirection =
+        (GetCombatAvatar()->GetActorLocation() - Shot->GetActorLocation()).GetSafeNormal();
     Shot->SetActorRotation(Shot->FlightDirection.Rotation());
     if (Enemy->Definition.ProjectileMesh)
         Shot->Mesh->SetStaticMesh(Enemy->Definition.ProjectileMesh);
@@ -1022,7 +1055,8 @@ bool ALoongCombatDirector::ChooseUpgrade(FName Id, int32 ExpectedGeneration)
         if (IsValid(Enemy) && IsValid(Enemy->Elements))
             Enemy->Elements->SetVisualsPaused(false);
     if (auto* C = Cast<ACharacter>(Player))
-        C->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+        if (!IsMounted())
+            C->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
     if (Experience >= ExperienceThreshold())
     {
         Experience -= ExperienceThreshold();
@@ -1039,6 +1073,7 @@ void ALoongCombatDirector::PlayerDied()
 
 void ALoongCombatDirector::CleanupActors()
 {
+    Dismount(true);
     for (auto& P : Projectiles)
         if (IsValid(P))
             P->Destroy();
@@ -1102,6 +1137,9 @@ void ALoongCombatDirector::Tick(float DeltaTime)
         EndCombat(false);
         return;
     }
+    if (IsMounted() && (!RiderController.IsValid() || RiderController->IsActorBeingDestroyed() ||
+                        RiderController->GetPawn() != MountPawn || !GetSelectedCompanion()))
+        Dismount(true);
     if (!IsFighting())
     {
         if (auto* C = Cast<ACharacter>(Player))
@@ -1139,7 +1177,8 @@ void ALoongCombatDirector::Tick(float DeltaTime)
         for (int32 n = 0; n < Batch; ++n)
         {
             float A = Random.FRandRange(0, 2 * PI);
-            FVector P = Player->GetActorLocation() + FVector(FMath::Cos(A) * 1300, FMath::Sin(A) * 1300, 0);
+            FVector P = GetCombatAvatar()->GetActorLocation() +
+                        FVector(FMath::Cos(A) * 1300, FMath::Sin(A) * 1300, 0);
             P.X = FMath::Clamp(P.X, GetActorLocation().X - Definition->ArenaHalfWidth,
                                GetActorLocation().X + Definition->ArenaHalfWidth);
             P.Y = FMath::Clamp(P.Y, GetActorLocation().Y - Definition->ArenaHalfWidth,

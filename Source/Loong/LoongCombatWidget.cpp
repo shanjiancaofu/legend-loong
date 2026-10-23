@@ -35,6 +35,7 @@ void ULoongCombatWidget::Setup(ALoongCombatDirector* InDirector)
     S->SetAnchors(FAnchors(0.5, 0.5));
     S->SetAlignment(FVector2D(0.5, 0.5));
     BuildElementTestPanel(Root);
+    BuildCompanionPanel(Root);
     RefreshCards();
 }
 
@@ -55,11 +56,14 @@ void ULoongCombatWidget::NativeTick(const FGeometry& Geometry, float DeltaTime)
         ElementPanelSize->SetWidthOverride(FMath::Clamp(Geometry.GetLocalSize().X * 0.34f, 260.f, 400.f));
     if (ElementStatusSize)
         ElementStatusSize->SetHeightOverride(FMath::Clamp(Geometry.GetLocalSize().Y - 210.f, 100.f, 260.f));
+    if (CompanionPanelSize)
+        CompanionPanelSize->SetWidthOverride(FMath::Clamp(Geometry.GetLocalSize().X * 0.29f, 250.f, 340.f));
     ElementRefreshTime -= DeltaTime;
     if (ElementRefreshTime <= 0.f)
     {
         ElementRefreshTime = 0.2f;
         RefreshElementTestPanel();
+        RefreshCompanionPanel();
     }
     if (DisplayedState != Director->State || DisplayedChoices != Director->UpgradeChoices)
         RefreshCards();

@@ -15,6 +15,7 @@ class LOONG_API ULoongCombatWidget : public UUserWidget
     GENERATED_BODY()
 public:
     void Setup(ALoongCombatDirector* InDirector);
+    bool IsPointerOverControls() const;
 
 protected:
     virtual void NativeDestruct() override;
@@ -36,6 +37,16 @@ private:
     ELoongCombatState DisplayedState = ELoongCombatState::Preparing;
     TArray<FName> DisplayedChoices;
     void RefreshCards();
+    void BuildCompanionPanel(class UCanvasPanel* Root);
+    void RefreshCompanionPanel();
+    UFUNCTION()
+    void CompanionAction(FName Action);
+    UPROPERTY()
+    TObjectPtr<USizeBox> CompanionPanelSize;
+    UPROPERTY()
+    TObjectPtr<UTextBlock> CompanionStatus;
+    UPROPERTY()
+    TArray<TObjectPtr<ULoongBuildingMenuButton>> CompanionButtons;
     void BuildElementTestPanel(class UCanvasPanel* Root);
     void RefreshElementTestPanel();
     void RestoreElementTestSettings();

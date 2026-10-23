@@ -45,13 +45,13 @@ pre-commit run -a
 | 组 | 本轮源码预期数量 | 覆盖 |
 |---|---:|---|
 | Quick | 10 | 伤害/阶段纯计算、三元素状态时间与位移、网格计算；不读取玩家槽或真实项目地图 |
-| Combat | 20 | 全部战斗测试，包括伴战龙、旧 180 秒逻辑模拟和真实保存配置审核 |
+| Combat | 32 | 全部战斗测试，包括伴战、切换/骑乘、落地下龙、真实控制器重生回调与缺失召回 |
 | Elements | 9 | 状态时间、元素/敌人、伴战来源、视觉组件生命周期、保存配置审核 |
 | Grid | 5 | 200cm 吸附、正负坐标、半格、占地、旋转与基地边界 |
 | Building | 8 | 网格、放置交互及建筑存档 |
 | Persistence | 2 | 原存档失败保护/恢复和新增扩展状态/清理 |
 | Camera | 1 | 相机方向参考（不代替手感验收） |
-| Full | 28 | 全部 Loong 原生自动化 |
+| Full | 40 | 全部 Loong 原生自动化 |
 
 预期发现名单从项目源码中的 `IMPLEMENT_SIMPLE_AUTOMATION_TEST` 名称提取并按组筛选，不用固定的“至少 12 项”判断。新增这类测试会自动加入前缀组。若未来采用 Complex Test、Spec、CQTest 的动态子用例，需扩展发现清单逻辑；当前运行器仍接受额外的引擎报告结果，但不能只靠源码正则保证那些动态用例均被发现。
 
@@ -128,3 +128,20 @@ Quick 唯一断言失败为新冰测试使用 FMath::IsNearlyEqual 的 UE_SMALL_
 可使用 `-Group Combat` 或 `-TestFilter Loong.Combat.Companion.` 运行。
 原 `Loong.Combat.P001A.CompanionElements` 继续验证元素来源隔离。
 具体结果与仍需 PIE 检查项见 `docs/P0-02A-Development-Report.md`。上面的 P0-QA-01 记录保留当时实际数量。
+
+## P0-02B / P0-02C 伴战操作与骑乘原型
+
+新增 `Source/Loong/Tests/LoongMountTests.cpp` 九项原生测试，前缀 `Loong.Combat.Mount.`：
+SelectionAndRecall、PossessionRoundTrip、ManualCombatAndSharedHealth、MovementDashAndPause、
+InterruptionCleanup、BlockedDismountAndCollision、PanelButtonWorkflow、BlueprintRiderAndLevelEndPlay、KeyboardInputRouting。
+
+`PanelButtonWorkflow` 初始化真实 WidgetTree 并执行按钮委托；`KeyboardInputRouting` 通过真实 UE PlayerInput 输入栈派发按键事件。
+它们不等同于 GPU 画面或真人鼠标操作验证。执行 `-Group Combat`、`-Group Full` 或 `-TestFilter Loong.Combat.Mount.`。
+实际版本、修复记录与中文 PIE 步骤见 `docs/P0-02BC-Development-Report.md`。不改历史报告的实际版本和测试数量。
+
+截图反馈后再增加 GroundedTallRiderDismount、RecallRestoresAbsentCompanion：
+覆盖真实碰撞地面上较高骑手退出较矮载体，以及卸下/销毁后的召回重建。
+最新 Full 为39项；早先37项记录保留当时实际结果。
+
+后续再增加 ActualBlueprintControllerNoRespawn，使用完整BeginPlay的实际角色与控制器蓝图，
+验证反复下龙/载体销毁后控制权与角色数量不变，并保留原角色死亡回调。当前Full为40项。

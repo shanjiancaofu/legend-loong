@@ -83,7 +83,12 @@ void ALoongArtTestCamera::Tick(float DeltaTime)
         return;
     if (bFollowPlayer)
         FocusActor = LocalController->GetPawn();
-    ApplyCamera(IsValid(FocusActor) ? FocusActor->GetActorLocation() + FocusOffset : FocusOffset);
+    const FVector TargetFocus =
+        IsValid(FocusActor) ? FocusActor->GetActorLocation() + FocusOffset : FocusOffset;
+    SmoothedFocus =
+        bHasSmoothedFocus ? FMath::VInterpTo(SmoothedFocus, TargetFocus, DeltaTime, 8.f) : TargetFocus;
+    bHasSmoothedFocus = true;
+    ApplyCamera(SmoothedFocus);
     SynchronizePawnMovementCamera(LocalController->GetPawn(), GetActorRotation());
     LocalController->bAutoManageActiveCameraTarget = false;
     if (LocalController->GetViewTarget() != this)
