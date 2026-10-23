@@ -120,6 +120,7 @@ public:
     bool bHeroAttack = false;
     bool bConsumed = false;
     bool bEnemyProjectile = false;
+    bool bCompanionProjectile = false;
     FVector FlightDirection = FVector::ForwardVector;
     virtual void Tick(float DeltaTime) override;
     void ResolveHit();
@@ -143,6 +144,11 @@ public:
     FLoongDragonAbility Definition;
     void Configure(const FLoongDragonAbility& Ability);
     virtual void Tick(float DeltaTime) override;
+    virtual void Destroyed() override;
+    virtual void EndPlay(const EEndPlayReason::Type Reason) override;
+
+private:
+    void StopCompanion();
 };
 UCLASS()
 class LOONG_API ALoongCombatDirector : public AActor
@@ -210,6 +216,8 @@ public:
 
     UFUNCTION(BlueprintCallable)
     void RemoveDragon(FName Id);
+    bool IsActiveCompanion(const ALoongCombatDragon* Dragon) const;
+    void UnregisterCompanion(ALoongCombatDragon* Dragon);
 
     UFUNCTION(BlueprintCallable)
     void EndCombat(bool bVictory);
@@ -278,6 +286,7 @@ private:
     void RecalculateStats();
     void OfferUpgrades();
     void CleanupActors();
+    void CancelCompanionProjectiles(ALoongCombatDragon* Dragon);
 };
 UCLASS()
 class LOONG_API ALoongCombatGameMode : public ALoongCombatArtTestGameMode

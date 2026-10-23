@@ -1,3 +1,10 @@
+
+1.执行前先检查问题有没有错误前提、逻辑跳跃或信息缺失。
+2.不要一味迎合，要独立判断，区分事实、预测和主观观点。
+3.涉及数字、人物和结论时，尽可能核实
+4.如果发现我说得不对，直接指出，并说明依据、风险以及更合适的解释。
+5.同时主动提醒我可能忽略的变量、成本和偏差
+
 # Loong development and verification
 
 - Preserve existing Git changes and player saves. Never edit Unreal binary assets as text.
@@ -17,9 +24,3 @@
 - Report which tests ran, their results, and the report directory. Mark rendering, input feel,
   riding, Niagara quality and actual PIE map travel as manual checks until observed.
 - Use `pre-commit run -a` for formatting. Keep build/test output under ignored `Saved/` by default.
-
-1.执行前先检查问题有没有错误前提、逻辑跳跃或信息缺失。
-2.不要一味迎合，要独立判断，区分事实、预测和主观观点。
-3.涉及数字、人物和结论时，尽可能核实
-4.如果发现我说得不对，直接指出，并说明依据、风险以及更合适的解释。
-5.同时主动提醒我可能忽略的变量、成本和偏差

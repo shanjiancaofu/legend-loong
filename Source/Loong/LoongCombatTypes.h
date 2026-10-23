@@ -240,6 +240,10 @@ struct LOONG_API FLoongDragonAbility
     UPROPERTY(EditAnywhere, BlueprintReadWrite)
     FVector FollowOffset = FVector(-160, 100, 150);
 
+    /** Recover to FollowOffset when separation from that destination exceeds this distance (cm). */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "100"))
+    float FollowRecoveryDistance = 2000.f;
+
     UPROPERTY(EditAnywhere, BlueprintReadWrite)
     TObjectPtr<UStaticMesh> Mesh;
 

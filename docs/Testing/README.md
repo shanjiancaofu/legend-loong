@@ -45,13 +45,13 @@ pre-commit run -a
 | 组 | 本轮源码预期数量 | 覆盖 |
 |---|---:|---|
 | Quick | 10 | 伤害/阶段纯计算、三元素状态时间与位移、网格计算；不读取玩家槽或真实项目地图 |
-| Combat | 14 | 全部战斗测试，包括旧 180 秒逻辑模拟和真实保存配置审核 |
+| Combat | 20 | 全部战斗测试，包括伴战龙、旧 180 秒逻辑模拟和真实保存配置审核 |
 | Elements | 9 | 状态时间、元素/敌人、伴战来源、视觉组件生命周期、保存配置审核 |
 | Grid | 5 | 200cm 吸附、正负坐标、半格、占地、旋转与基地边界 |
 | Building | 8 | 网格、放置交互及建筑存档 |
 | Persistence | 2 | 原存档失败保护/恢复和新增扩展状态/清理 |
 | Camera | 1 | 相机方向参考（不代替手感验收） |
-| Full | 22 | 全部 Loong 原生自动化 |
+| Full | 28 | 全部 Loong 原生自动化 |
 
 预期发现名单从项目源码中的 `IMPLEMENT_SIMPLE_AUTOMATION_TEST` 名称提取并按组筛选，不用固定的“至少 12 项”判断。新增这类测试会自动加入前缀组。若未来采用 Complex Test、Spec、CQTest 的动态子用例，需扩展发现清单逻辑；当前运行器仍接受额外的引擎报告结果，但不能只靠源码正则保证那些动态用例均被发现。
 
@@ -119,3 +119,12 @@ Quick 唯一断言失败为新冰测试使用 FMath::IsNearlyEqual 的 UE_SMALL_
 自定义筛选初次验证发现参数 Group 的 ValidateSet 不允许将其重赋值为 Custom；已使用独立 runGroup 标签并重新实际运行通过。较早的 Windows PowerShell 5.1 Persistence 验证也曾通过，但按用户最新要求，现在正式入口明确要求 PowerShell 7，不继续维护旧版兼容路径。
 
 继续开发优先增加实际 L_Combat → 结算 → L_Base 的关卡流程测试，以及未来持久奖励钱包实现后的支付防重入测试。当前没有自动执行上述真实 PIE、骑乘、Niagara 视觉或 GPU 性能验收。
+
+## P0-02A 伴战龙回归
+
+新增 `Source/Loong/Tests/LoongCompanionTests.cpp` 六项：
+`Loong.Combat.Companion.FollowConvergence`、`FarDistanceRecovery`、`TargetAndAttackCooldown`、
+`UnequipCancelsOwnedAttacks`、`DestroyAndSettlementSafety`、`DirectorEndPlayCleanup`。
+可使用 `-Group Combat` 或 `-TestFilter Loong.Combat.Companion.` 运行。
+原 `Loong.Combat.P001A.CompanionElements` 继续验证元素来源隔离。
+具体结果与仍需 PIE 检查项见 `docs/P0-02A-Development-Report.md`。上面的 P0-QA-01 记录保留当时实际数量。

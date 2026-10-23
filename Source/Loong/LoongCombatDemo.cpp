@@ -137,12 +137,17 @@ ULoongAutoAttackComponent::ULoongAutoAttackComponent()
 
 ALoongCombatEnemy* ULoongAutoAttackComponent::FindTarget() const
 {
-    if (!Director.IsValid() || !GetOwner())
+    if (!Director.IsValid() || Director->IsActorBeingDestroyed() || !IsValid(GetOwner()) ||
+        GetOwner()->IsActorBeingDestroyed() || !FMath::IsFinite(Stats.AttackRange) || Stats.AttackRange <= 0)
         return nullptr;
+    if (const auto* Dragon = Cast<ALoongCombatDragon>(GetOwner()))
+        if (!Director->IsActiveCompanion(Dragon))
+            return nullptr;
     ALoongCombatEnemy* Best = nullptr;
     float BestSquared = FMath::Square(Stats.AttackRange);
     for (auto& Enemy : Director->Enemies)
-        if (IsValid(Enemy) && !Enemy->IsActorBeingDestroyed() && Enemy->Health->IsAlive())
+        if (IsValid(Enemy) && !Enemy->IsActorBeingDestroyed() && IsValid(Enemy->Health) &&
+            Enemy->Health->IsAlive())
         {
             float Distance = FVector::DistSquared(GetOwner()->GetActorLocation(), Enemy->GetActorLocation());
             if (Distance < BestSquared)
@@ -158,8 +163,12 @@ void ULoongAutoAttackComponent::TickComponent(float DeltaTime, ELevelTick TickTy
                                               FActorComponentTickFunction* Fn)
 {
     Super::TickComponent(DeltaTime, TickType, Fn);
-    if (!Director.IsValid() || !Director->IsFighting() || !Director->PlayerHealth ||
-        !Director->PlayerHealth->IsAlive())
+    if (!FMath::IsFinite(DeltaTime) || DeltaTime <= 0 || !IsValid(GetOwner()) ||
+        GetOwner()->IsActorBeingDestroyed() || !Director.IsValid() || Director->IsActorBeingDestroyed() ||
+        !Director->IsFighting() || !IsValid(Director->Player) || Director->Player->IsActorBeingDestroyed() ||
+        !IsValid(Director->PlayerHealth) || !Director->PlayerHealth->IsAlive() ||
+        !FMath::IsFinite(Stats.AttackDamage) || Stats.AttackDamage <= 0 ||
+        !FMath::IsFinite(Stats.AttackInterval) || Stats.AttackInterval <= 0)
         return;
     Cooldown -= DeltaTime;
     if (Cooldown > 0)
@@ -309,13 +318,20 @@ ALoongCombatProjectile::ALoongCombatProjectile()
 void ALoongCombatProjectile::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
-    if (!Director.IsValid() || !Director->PlayerHealth || !Director->PlayerHealth->IsAlive())
+    if (!Director.IsValid() || Director->IsActorBeingDestroyed() || !IsValid(Director->PlayerHealth) ||
+        !Director->PlayerHealth->IsAlive())
     {
         Destroy();
         return;
     }
     if (!Director->IsFighting())
         return;
+    if (bCompanionProjectile && !Director->IsActiveCompanion(Cast<ALoongCombatDragon>(Attacker.Get())))
+    {
+        bConsumed = true;
+        Destroy();
+        return;
+    }
     LifeSeconds += DeltaTime;
     if (LifeSeconds > 4)
     {
@@ -339,7 +355,8 @@ void ALoongCombatProjectile::Tick(float DeltaTime)
         SetActorLocation(End);
         return;
     }
-    if (!Target.IsValid() || !Target->Health->IsAlive())
+    if (!Target.IsValid() || Target->IsActorBeingDestroyed() || !IsValid(Target->Health) ||
+        !Target->Health->IsAlive())
     {
         Destroy();
         return;
@@ -360,6 +377,11 @@ void ALoongCombatProjectile::ResolveHit()
     if (bConsumed || !Director.IsValid() || !Director->IsFighting())
         return;
     bConsumed = true;
+    if (bCompanionProjectile && !Director->IsActiveCompanion(Cast<ALoongCombatDragon>(Attacker.Get())))
+    {
+        Destroy();
+        return;
+    }
     if (bEnemyProjectile)
     {
         Director->PlayerHealth->ApplyCombatDamage(Damage, Attacker.Get());
@@ -390,7 +412,13 @@ ALoongCombatDragon::ALoongCombatDragon()
 void ALoongCombatDragon::Configure(const FLoongDragonAbility& Ability)
 {
     Definition = Ability;
+    if (Definition.FollowOffset.ContainsNaN())
+        Definition.FollowOffset = FLoongDragonAbility().FollowOffset;
+    if (!FMath::IsFinite(Definition.FollowRecoveryDistance) || Definition.FollowRecoveryDistance < 100.f)
+        Definition.FollowRecoveryDistance = 2000.f;
     Attack->Director = Director;
+    Attack->bHeroAttack = false;
+    Attack->Cooldown = 0;
     Attack->Stats.AttackDamage = Ability.CompanionDamage;
     Attack->Stats.AttackInterval = Ability.CompanionInterval;
     Attack->Stats.AttackRange = Ability.CompanionRange;
@@ -422,10 +450,46 @@ void ALoongCombatDragon::Configure(const FLoongDragonAbility& Ability)
 void ALoongCombatDragon::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
-    if (!Director.IsValid() || !Director->IsFighting() || !Director->Player)
+    if (IsActorBeingDestroyed() || !FMath::IsFinite(DeltaTime) || DeltaTime <= 0 || !Director.IsValid() ||
+        Director->IsActorBeingDestroyed() || !Director->IsFighting() || !Director->IsActiveCompanion(this) ||
+        !IsValid(Director->Player) || Director->Player->IsActorBeingDestroyed() ||
+        !IsValid(Director->PlayerHealth) || !Director->PlayerHealth->IsAlive())
         return;
-    SetActorLocation(FMath::VInterpTo(
-        GetActorLocation(), Director->Player->GetActorLocation() + Definition.FollowOffset, DeltaTime, 5));
+    const FVector Destination = Director->Player->GetActorLocation() + Definition.FollowOffset;
+    if (Destination.ContainsNaN())
+        return;
+    const FVector Current = GetActorLocation();
+    if (Current.ContainsNaN() ||
+        FVector::DistSquared(Current, Destination) > FMath::Square(Definition.FollowRecoveryDistance))
+        SetActorLocation(Destination, false, nullptr, ETeleportType::TeleportPhysics);
+    else
+        SetActorLocation(FMath::VInterpTo(Current, Destination, DeltaTime, 5));
+}
+
+void ALoongCombatDragon::StopCompanion()
+{
+    SetActorTickEnabled(false);
+    if (IsValid(Attack))
+    {
+        Attack->SetComponentTickEnabled(false);
+        Attack->Director.Reset();
+        Attack->OnShot.Clear();
+    }
+    if (Director.IsValid() && !Director->IsActorBeingDestroyed())
+        Director->UnregisterCompanion(this);
+    Director.Reset();
+}
+
+void ALoongCombatDragon::Destroyed()
+{
+    StopCompanion();
+    Super::Destroyed();
+}
+
+void ALoongCombatDragon::EndPlay(const EEndPlayReason::Type Reason)
+{
+    StopCompanion();
+    Super::EndPlay(Reason);
 }
 
 ALoongCombatDirector::ALoongCombatDirector()
@@ -513,14 +577,19 @@ FLoongCombatStats ALoongCombatDirector::GetEffectiveStats() const
 
 void ALoongCombatDirector::RecalculateStats()
 {
-    if (PlayerAttack)
+    if (IsValid(PlayerAttack))
         PlayerAttack->Stats = GetEffectiveStats();
 }
 
 void ALoongCombatDirector::EquipDragon(FLoongDragonAbility Ability)
 {
-    if (Ability.DragonId.IsNone() || !IsFighting() || !IsValid(Player))
+    if (Ability.DragonId.IsNone() || !IsFighting() || !IsValid(Player) || Player->IsActorBeingDestroyed() ||
+        !IsValid(PlayerHealth) || !PlayerHealth->IsAlive() || Player->GetActorLocation().ContainsNaN())
         return;
+    if (Ability.FollowOffset.ContainsNaN())
+        Ability.FollowOffset = FLoongDragonAbility().FollowOffset;
+    if (!FMath::IsFinite(Ability.FollowRecoveryDistance) || Ability.FollowRecoveryDistance < 100.f)
+        Ability.FollowRecoveryDistance = 2000.f;
     RemoveDragon(Ability.DragonId);
     EquippedDragons.Add(Ability.DragonId, Ability);
     RecalculateStats();
@@ -541,17 +610,49 @@ void ALoongCombatDirector::RemoveDragon(FName Id)
 {
     EquippedDragons.Remove(Id);
     ElementTriggerReadyAt.Remove(Id);
-    for (const auto& Enemy : Enemies)
-        if (IsValid(Enemy))
-            Enemy->Elements->RemoveSource(Id);
-    for (int32 i = Companions.Num() - 1; i >= 0; --i)
-        if (!IsValid(Companions[i]) || Companions[i]->Definition.DragonId == Id)
+    // Unregister before destroying: EndPlay/Destroyed must not re-enter the removal iteration.
+    const auto PreviousCompanions = Companions;
+    Companions.RemoveAll(
+        [Id](const auto& Dragon)
         {
-            if (IsValid(Companions[i]))
-                Companions[i]->Destroy();
-            Companions.RemoveAt(i);
+            return !IsValid(Dragon) || Dragon->Definition.DragonId == Id;
+        });
+    const auto Targets = Enemies;
+    for (const auto& Enemy : Targets)
+        if (IsValid(Enemy) && IsValid(Enemy->Elements))
+            Enemy->Elements->RemoveSource(Id);
+    for (const auto& Dragon : PreviousCompanions)
+        if (IsValid(Dragon) && Dragon->Definition.DragonId == Id)
+        {
+            CancelCompanionProjectiles(Dragon);
+            Dragon->Destroy();
         }
     RecalculateStats();
+}
+
+bool ALoongCombatDirector::IsActiveCompanion(const ALoongCombatDragon* Dragon) const
+{
+    return IsValid(Dragon) && !Dragon->IsActorBeingDestroyed() && Dragon->Director.Get() == this &&
+           Companions.Contains(Dragon) && EquippedDragons.Contains(Dragon->Definition.DragonId);
+}
+
+void ALoongCombatDirector::CancelCompanionProjectiles(ALoongCombatDragon* Dragon)
+{
+    for (int32 i = Projectiles.Num() - 1; i >= 0; --i)
+        if (IsValid(Projectiles[i]) && Projectiles[i]->Attacker.GetEvenIfUnreachable() == Dragon)
+        {
+            Projectiles[i]->bConsumed = true;
+            Projectiles[i]->Destroy();
+            Projectiles.RemoveAt(i);
+        }
+}
+
+void ALoongCombatDirector::UnregisterCompanion(ALoongCombatDragon* Dragon)
+{
+    if (!Dragon || Companions.Remove(Dragon) == 0)
+        return;
+    RemoveDragon(Dragon->Definition.DragonId);
+    CancelCompanionProjectiles(Dragon);
 }
 
 const FLoongEnemyDefinition* ULoongCombatDefinition::FindEnemy(FName Id) const
@@ -684,7 +785,7 @@ void ALoongCombatDirector::ApplyDragonElements(ALoongCombatEnemy* Enemy, AActor*
     bool HasSkills = false;
     const bool Test = LoongElementDebug::TestMode();
     const auto* Companion = Cast<ALoongCombatDragon>(Source);
-    if (Companion && (!Companions.Contains(Companion) || Companion->IsActorBeingDestroyed()))
+    if (Companion && !IsActiveCompanion(Companion))
     {
         LastElementDiagnostic = TEXT("companion no longer equipped");
         return;
@@ -752,8 +853,13 @@ void ALoongCombatDirector::FireProjectile(AActor* Source, ALoongCombatEnemy* Ene
         {
             return !IsValid(P) || P->IsActorBeingDestroyed();
         });
-    if (Projectiles.Num() >= Definition->MaxProjectiles || !IsFighting() || !IsValid(Source) ||
-        !IsValid(Enemy) || !Enemy->Health->IsAlive())
+    if (!Definition || Projectiles.Num() >= Definition->MaxProjectiles || !IsFighting() || !IsValid(Source) ||
+        Source->IsActorBeingDestroyed() || !IsValid(Enemy) || Enemy->IsActorBeingDestroyed() ||
+        !IsValid(Enemy->Health) || !Enemy->Health->IsAlive() || !FMath::IsFinite(Stats.AttackDamage) ||
+        Stats.AttackDamage <= 0 || !FMath::IsFinite(Stats.ProjectileSpeed) || Stats.ProjectileSpeed <= 0)
+        return;
+    auto* Companion = Cast<ALoongCombatDragon>(Source);
+    if (Companion && !IsActiveCompanion(Companion))
         return;
     auto* Shot = GetWorld()->SpawnActor<ALoongCombatProjectile>(
         Source->GetActorLocation() + FVector(0, 0, 30), FRotator::ZeroRotator);
@@ -765,6 +871,7 @@ void ALoongCombatDirector::FireProjectile(AActor* Source, ALoongCombatEnemy* Ene
     Shot->Damage = Stats.AttackDamage;
     Shot->Speed = FMath::Max(1.f, Stats.ProjectileSpeed);
     Shot->bHeroAttack = bHero;
+    Shot->bCompanionProjectile = Companion != nullptr;
     if (Definition->ProjectileMesh)
         Shot->Mesh->SetStaticMesh(Definition->ProjectileMesh);
     if (Definition->ProjectileMaterial)
@@ -781,6 +888,9 @@ float ALoongCombatDirector::ApplyHit(ALoongCombatEnemy* Enemy, AActor* Source, f
     if (!IsFighting() || !Definition || !IsValid(Enemy) || !IsValid(Enemy->Health) ||
         !Enemy->Health->IsAlive())
         return 0;
+    if (const auto* Companion = Cast<ALoongCombatDragon>(Source))
+        if (!IsActiveCompanion(Companion))
+            return 0;
     const bool ObservationTest = LoongElementDebug::TestMode();
     float Applied =
         Enemy->Health->ApplyCombatDamage(ObservationTest ? FMath::Min(Damage, 1.f) : Damage, Source);
@@ -940,10 +1050,11 @@ void ALoongCombatDirector::CleanupActors()
             E->Destroy();
         }
     Enemies.Reset();
-    for (auto& D : Companions)
+    const auto PreviousCompanions = Companions;
+    Companions.Reset();
+    for (auto& D : PreviousCompanions)
         if (IsValid(D))
             D->Destroy();
-    Companions.Reset();
 }
 
 void ALoongCombatDirector::EndCombat(bool bVictory)
@@ -964,9 +1075,9 @@ void ALoongCombatDirector::EndCombat(bool bVictory)
     RecalculateStats();
     State = ELoongCombatState::Results;
     OnSettled.Broadcast(Result);
-    if (PlayerAttack)
+    if (IsValid(PlayerAttack))
         PlayerAttack->SetComponentTickEnabled(false);
-    if (auto* C = Cast<ACharacter>(Player))
+    if (auto* C = Cast<ACharacter>(Player); IsValid(C) && !C->IsActorBeingDestroyed())
     {
         C->GetCharacterMovement()->StopMovementImmediately();
         C->GetCharacterMovement()->DisableMovement();
@@ -979,9 +1090,9 @@ void ALoongCombatDirector::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
     UpdateElementDebug(DeltaTime);
-    if (!IsValid(Player) || !PlayerHealth)
+    if (!IsValid(Player) || Player->IsActorBeingDestroyed() || !IsValid(PlayerHealth))
     {
-        if (IsFighting())
+        if (State == ELoongCombatState::Fighting || State == ELoongCombatState::UpgradeSelection)
             EndCombat(false);
         return;
     }
@@ -1048,15 +1159,15 @@ void ALoongCombatDirector::ReturnToBase()
 void ALoongCombatDirector::EndPlay(const EEndPlayReason::Type Reason)
 {
     CleanupActors();
-    if (Widget)
+    if (IsValid(Widget))
         Widget->RemoveFromParent();
-    if (PlayerHealth)
+    if (IsValid(PlayerHealth))
         PlayerHealth->NativeDeath.RemoveAll(this);
-    if (PlayerHealth)
+    if (IsValid(PlayerHealth))
         PlayerHealth->OnDeath.RemoveDynamic(this, &ALoongCombatDirector::PlayerDied);
-    if (PlayerAttack)
+    if (IsValid(PlayerAttack))
         PlayerAttack->DestroyComponent();
-    if (PlayerHealth)
+    if (IsValid(PlayerHealth))
         PlayerHealth->DestroyComponent();
     Super::EndPlay(Reason);
 }
